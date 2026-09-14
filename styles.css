@@ -50,6 +50,12 @@ button, label, input[type="range"], select { cursor: pointer; }
 .volume-settings small { color: var(--muted); font-size: 9px; }
 .volume-settings label { white-space: nowrap; color: var(--muted); }
 .volume-settings input { width: 61px; padding: 6px; color: var(--text); text-align: right; border: 1px solid #315060; border-radius: 5px; background: #101f29; }
+.estimator-info { border: 1px solid #20343f; border-radius: 6px; background: #0c1921; color: #8da3ae; font-size: 9px; }
+.estimator-info summary { padding: 7px 9px; color: #b3c5cd; font-weight: 700; }
+.estimator-info dl { margin: 0; padding: 0 9px 8px; }
+.estimator-info dl div { display: flex; justify-content: space-between; padding-top: 3px; }
+.estimator-info dt, .estimator-info dd { margin: 0; }
+.estimator-info dd { color: #d0dde3; font-variant-numeric: tabular-nums; }
 .steps-section { min-height: 0; display: flex; flex: 1; flex-direction: column; }
 .section-title { display: flex; justify-content: space-between; padding: 8px 2px; color: #b7c8d1; font-size: 11px; }
 .section-title strong { color: var(--cyan); }
@@ -93,7 +99,9 @@ canvas { display: block; width: 100%; height: 100%; }
 .timeline-group { min-width: 180px; flex: 1; margin: 0 8px; }
 .timeline-copy { display: flex; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
 .timeline-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
-.timeline-copy span { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.timeline-copy > span { flex: 0 0 auto; text-align: right; color: var(--muted); font-size: 10px; }
+.timeline-copy span i, .timeline-copy span b { display: block; font-style: normal; }
+.timeline-copy span b { margin-top: 2px; color: var(--cyan); font-variant-numeric: tabular-nums; }
 #timeline { width: 100%; accent-color: var(--cyan); }
 .speed-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
 .speed-control select { padding: 8px 20px 8px 8px; color: var(--text); border: 1px solid #314754; border-radius: 5px; background: #111f29; }

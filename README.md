@@ -29,3 +29,9 @@ Then visit `http://HOST_IP:8080` from another machine on the internal network. U
 - Each source well ends at 90 µL; each destination well receives 10 µL.
 - Protocol files remain in the browser and are not uploaded to a server.
 - The current parser recognizes and validates the supplied colony-rearray layout. A production version should use Opentrons' protocol-analysis output rather than executing arbitrary uploaded Python in the browser.
+
+## Motion and timing model
+
+The visualizer uses OT-2 deck pitch and the official A1/pitch/bottom-Z geometry for the three bundled labware load names. Each move is divided into a vertical retract, accelerated XY traversal, vertical descent, and liquid-handling operation. Defaults are 400 mm/s XY gantry speed, 125 mm/s Z speed, and 7.6 µL/s P20 Multi GEN2 aspiration/dispense flow. Explicit `default_speed`, `flow_rate.aspirate`, and `flow_rate.dispense` assignments in an uploaded file override those defaults.
+
+Estimated time excludes robot initialization, homing, calibration, network latency, user pauses, and hardware variation. Treat it as a planning estimate with approximately ±20% uncertainty until it has been calibrated against timestamps from a physical OT-2.

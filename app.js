@@ -7,6 +7,34 @@ const COLORS = {
   robotShade: "#87969d", dark: "#071017", path: "#25d8ea"
 };
 
+// OT-2 deck and labware geometry, in millimeters. Labware coordinates are
+// taken from the official Opentrons definitions bundled for these load names.
+const MOTION = {
+  slotPitchX: 132.5,
+  slotPitchY: 90.5,
+  deckOffsetX: 115.65,
+  deckOffsetY: 68.03,
+  wellA1X: 14.38,
+  wellA1Y: 74.24,
+  wellPitch: 9,
+  sourceBottomZ: 1.05,
+  destinationBottomZ: 3.55,
+  bottomClearance: 1,
+  tipRackTopZ: 64.69,
+  tipOverlap: 8.25,
+  exposedTipLength: 30.95,
+  safeZ: 111,
+  gantrySpeed: 400,
+  gantryAcceleration: 1000,
+  zSpeed: 125,
+  zAcceleration: 500,
+  aspirateFlowRate: 7.6,
+  dispenseFlowRate: 7.6,
+  pickupSeconds: 3.5,
+  dropSeconds: 2,
+  commandSettleSeconds: 0.15
+};
+
 const $ = (selector) => document.querySelector(selector);
 const topCanvas = $("#top-canvas");
 const quarterCanvas = $("#quarter-canvas");
@@ -20,7 +48,6 @@ const state = {
   playing: false,
   speed: 1,
   lastTime: 0,
-  actionDuration: 1250,
   steps: [],
   uploadedSource: ""
 };
@@ -63,11 +90,17 @@ function derivedState() {
   let tipVolume = 0;
 
   state.steps.forEach((step, index) => {
-    const fraction = index < state.stepIndex ? 1 : index === state.stepIndex ? state.progress : 0;
+    let fraction = index < state.stepIndex ? 1 : 0;
+    if (index === state.stepIndex) {
+      const plan = actionPlan(index);
+      const operationStart = plan.retract + plan.traverse + plan.descend;
+      const elapsed = state.progress * plan.total;
+      fraction = plan.operation ? Math.max(0, Math.min(1, (elapsed - operationStart) / plan.operation)) : 1;
+    }
     if (fraction <= 0) return;
     if (step.type === "pickup") {
       tipsAttached = fraction > 0.45;
-      if (fraction >= 1) usedTipColumns.add(step.source);
+      if (fraction > 0.45) usedTipColumns.add(step.source);
     } else if (step.type === "aspirate") {
       sources[step.source] -= step.volume * fraction;
       tipVolume += step.volume * fraction;
@@ -89,28 +122,89 @@ function previousLocation() {
 
 function ease(t) { return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
+function workHeight(loc) {
+  if (loc.kind === "source") return MOTION.sourceBottomZ + MOTION.bottomClearance + MOTION.exposedTipLength;
+  if (loc.kind === "destination") return MOTION.destinationBottomZ + MOTION.bottomClearance + MOTION.exposedTipLength;
+  if (loc.kind === "tips") return MOTION.tipRackTopZ - MOTION.tipOverlap;
+  if (loc.kind === "trash") return 80;
+  return MOTION.safeZ;
+}
+
+function trapezoidSeconds(distance, maxSpeed, acceleration) {
+  const d = Math.max(0, distance);
+  if (!d) return 0;
+  const distanceToMax = maxSpeed * maxSpeed / acceleration;
+  if (d <= distanceToMax) return 2 * Math.sqrt(d / acceleration);
+  return 2 * maxSpeed / acceleration + (d - distanceToMax) / maxSpeed;
+}
+
+function operationSeconds(step) {
+  if (step.type === "aspirate") return step.volume / MOTION.aspirateFlowRate + MOTION.commandSettleSeconds;
+  if (step.type === "dispense") return step.volume / MOTION.dispenseFlowRate + MOTION.commandSettleSeconds;
+  if (step.type === "pickup") return MOTION.pickupSeconds;
+  if (step.type === "drop") return MOTION.dropSeconds;
+  return MOTION.commandSettleSeconds;
+}
+
+function actionPlan(index) {
+  const step = state.steps[index];
+  const previous = index === 0 ? makeDeckLocation("home", 12, 0) : state.steps[index - 1].location;
+  const from = deckCoordinate(previous);
+  const to = deckCoordinate(step.location);
+  const fromZ = index === 0 ? MOTION.safeZ : workHeight(previous);
+  const toZ = workHeight(step.location);
+  const retract = trapezoidSeconds(MOTION.safeZ - fromZ, MOTION.zSpeed, MOTION.zAcceleration);
+  const xyDistance = Math.hypot(to.x - from.x, to.y - from.y);
+  const traverse = trapezoidSeconds(xyDistance, MOTION.gantrySpeed, MOTION.gantryAcceleration);
+  const descend = trapezoidSeconds(MOTION.safeZ - toZ, MOTION.zSpeed, MOTION.zAcceleration);
+  const operation = operationSeconds(step);
+  const total = retract + traverse + descend + operation;
+  return { step, from, to, fromZ, toZ, retract, traverse, descend, operation, total };
+}
+
+function protocolSeconds() {
+  return state.steps.reduce((sum, _step, index) => sum + actionPlan(index).total, 0);
+}
+
+function elapsedProtocolSeconds() {
+  let elapsed = 0;
+  for (let index = 0; index < state.stepIndex; index += 1) elapsed += actionPlan(index).total;
+  return elapsed + actionPlan(state.stepIndex).total * state.progress;
+}
+
 function pipettePose() {
-  const current = state.steps[state.stepIndex] || state.steps[state.steps.length - 1];
-  const from = deckCoordinate(previousLocation());
-  const to = deckCoordinate(current.location);
-  const p = ease(Math.min(1, state.progress / .78));
-  const x = from.x + (to.x - from.x) * p;
-  const y = from.y + (to.y - from.y) * p;
-  const travel = Math.sin(Math.PI * p);
-  const working = current.type === "pickup" ? 28 : current.type === "drop" ? 38 : 18;
-  const z = working + travel * 92 + (1 - Math.min(1, state.progress / .78)) * 4;
-  return { x, y, z, current };
+  const plan = actionPlan(state.stepIndex);
+  const seconds = state.progress * plan.total;
+  let x = plan.from.x, y = plan.from.y, z = plan.fromZ;
+  if (seconds < plan.retract && plan.retract) {
+    z = plan.fromZ + (MOTION.safeZ - plan.fromZ) * ease(seconds / plan.retract);
+  } else if (seconds < plan.retract + plan.traverse && plan.traverse) {
+    const p = ease((seconds - plan.retract) / plan.traverse);
+    x = plan.from.x + (plan.to.x - plan.from.x) * p;
+    y = plan.from.y + (plan.to.y - plan.from.y) * p;
+    z = MOTION.safeZ;
+  } else if (seconds < plan.retract + plan.traverse + plan.descend && plan.descend) {
+    const p = ease((seconds - plan.retract - plan.traverse) / plan.descend);
+    x = plan.to.x; y = plan.to.y;
+    z = MOTION.safeZ + (plan.toZ - MOTION.safeZ) * p;
+  } else {
+    x = plan.to.x; y = plan.to.y; z = plan.toZ;
+  }
+  return { x, y, z, current: plan.step };
 }
 
 function deckCoordinate(loc) {
-  if (loc.kind === "home") return { x: 355, y: 300 };
-  if (loc.kind === "trash") return { x: 355, y: 300 };
+  if (loc.kind === "home") return { x: 355, y: 342 };
+  if (loc.kind === "trash") return { x: 351.4, y: 342 };
   const col = (loc.slot - 1) % 3;
   const row = Math.floor((loc.slot - 1) / 3);
-  const x = col * 132.5 + 64;
-  const y = row * 90.5 + 43;
+  const x = col * MOTION.slotPitchX + 64;
+  const y = row * MOTION.slotPitchY + 43;
   if (["source", "destination", "tips"].includes(loc.kind)) {
-    return { x: col * 132.5 + 18 + loc.column * 8.9, y };
+    return {
+      x: col * MOTION.slotPitchX + MOTION.wellA1X + loc.column * MOTION.wellPitch,
+      y: row * MOTION.slotPitchY + MOTION.wellA1Y
+    };
   }
   return { x, y };
 }
@@ -217,13 +311,17 @@ function drawTop() {
 
   const pose = pipettePose();
   const px = box.x + pose.x / 397.5 * box.slotW * 3;
-  const py = box.y + (3 - pose.y / 90.5) * box.slotH + box.slotH / 2;
+  const py = box.y + (4 - pose.y / MOTION.slotPitchY) * box.slotH;
   ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 1.5;
   const dest = deckCoordinate(current.location); const prev = deckCoordinate(previousLocation());
   ctx.beginPath();
-  ctx.moveTo(box.x + prev.x / 397.5 * box.slotW * 3, box.y + (3 - prev.y / 90.5) * box.slotH + box.slotH / 2);
-  ctx.lineTo(box.x + dest.x / 397.5 * box.slotW * 3, box.y + (3 - dest.y / 90.5) * box.slotH + box.slotH / 2); ctx.stroke();
+  ctx.moveTo(box.x + prev.x / 397.5 * box.slotW * 3, box.y + (4 - prev.y / MOTION.slotPitchY) * box.slotH);
+  ctx.lineTo(box.x + dest.x / 397.5 * box.slotW * 3, box.y + (4 - dest.y / MOTION.slotPitchY) * box.slotH); ctx.stroke();
   ctx.setLineDash([]); ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fillStyle = "rgba(32,212,230,.18)"; ctx.fill(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
+  if (["source", "destination", "tips"].includes(current.location.kind)) {
+    const pyH = box.y + (4 - (pose.y - 7 * MOTION.wellPitch) / MOTION.slotPitchY) * box.slotH;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, pyH); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
+  }
   ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fillStyle = COLORS.path; ctx.fill(); ctx.restore();
 }
 
@@ -249,12 +347,12 @@ function prism(ctx, x, y, z, w, d, h, view, colors) {
 
 function drawPlateIso(ctx, slot, type, values, highlighted, view) {
   const col = (slot - 1) % 3, row = Math.floor((slot - 1) / 3);
-  const x = col * 132.5 + 6, y = row * 90.5 + 8;
-  const h = type === "tips" ? 20 : 10;
-  prism(ctx, x, y, 3, 116, 72, h, view, { top: type === "tips" ? "#39443a" : "#bfcbd0", side: "#65757c", front: "#778890", edge: "#17242b" });
+  const x = col * MOTION.slotPitchX, y = row * MOTION.slotPitchY;
+  const h = type === "tips" ? 64.69 : type === "source" ? 16 : 14.22;
+  prism(ctx, x, y, 0, 127.76, 85.48, h, view, { top: type === "tips" ? "#39443a" : "#bfcbd0", side: "#65757c", front: "#778890", edge: "#17242b" });
   for (let c = 0; c < 12; c += 1) {
     for (let r = 0; r < 8; r += 1) {
-      const point = isoProject(x + 9 + c * 8.8, y + 8 + r * 7.8, 5 + h, view);
+      const point = isoProject(x + MOTION.wellA1X + c * MOTION.wellPitch, y + MOTION.wellA1Y - r * MOTION.wellPitch, h + .6, view);
       const rx = Math.max(1.3, view.width / 720 * 2.2), ry = rx * .55;
       ctx.beginPath(); ctx.ellipse(point.x, point.y, rx, ry, 0, 0, Math.PI * 2);
       if (type === "tips") ctx.fillStyle = values.has(c) ? "#263139" : "#ddea55";
@@ -290,24 +388,32 @@ function drawQuarter() {
   prism(ctx, -20, 18, 300, 445, 28, 56, view, { top: "#f1f3f3", side: "#8d9ba1", front: "#dbe1e3", edge: "#65747b" });
 
   const pose = pipettePose();
-  const bodyX = pose.x - 20, bodyY = pose.y - 10;
+  const bodyX = pose.x - 20, bodyY = pose.y - 42;
   prism(ctx, bodyX, bodyY, pose.z + 55, 40, 26, 76, view, { top: "#e8edef", side: "#6f7d83", front: "#bdc8cc", edge: "#45535a" });
   for (let channel = 0; channel < 8; channel += 1) {
-    const tipPoint = isoProject(pose.x, pose.y - 25 + channel * 7.1, pose.z, view);
-    const barrel = isoProject(pose.x, pose.y - 25 + channel * 7.1, pose.z + 64, view);
+    const channelY = pose.y - channel * MOTION.wellPitch;
+    const tipPoint = isoProject(pose.x, channelY, pose.z, view);
+    const barrel = isoProject(pose.x, channelY, pose.z + 64, view);
     ctx.strokeStyle = "#1c2529"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(barrel.x, barrel.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke();
     if (liquids.tipsAttached) {
-      const end = isoProject(pose.x, pose.y - 25 + channel * 7.1, pose.z - 26, view);
+      const end = isoProject(pose.x, channelY, pose.z - MOTION.exposedTipLength, view);
       ctx.strokeStyle = COLORS.tip; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tipPoint.x, tipPoint.y); ctx.lineTo(end.x, end.y); ctx.stroke();
       if (liquids.tipVolume > 0) { ctx.strokeStyle = COLORS.liquid; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(end.x, end.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke(); }
     }
   }
 
-  const from = isoProject(deckCoordinate(previousLocation()).x, deckCoordinate(previousLocation()).y, 86, view);
-  const toDeck = deckCoordinate(current.location); const to = isoProject(toDeck.x, toDeck.y, 86, view);
-  ctx.save(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.setLineDash([7,6]); ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.quadraticCurveTo((from.x+to.x)/2, Math.min(from.y,to.y)-36, to.x,to.y); ctx.stroke(); ctx.restore();
+  const plan = actionPlan(state.stepIndex);
+  const pathPoints = [
+    isoProject(plan.from.x, plan.from.y, plan.fromZ, view),
+    isoProject(plan.from.x, plan.from.y, MOTION.safeZ, view),
+    isoProject(plan.to.x, plan.to.y, MOTION.safeZ, view),
+    isoProject(plan.to.x, plan.to.y, plan.toZ, view)
+  ];
+  ctx.save(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.setLineDash([7,6]); ctx.beginPath();
+  pathPoints.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
+  ctx.stroke(); ctx.restore();
 
-  const mmX = 115.65 + pose.x, mmY = 68.03 + pose.y;
+  const mmX = MOTION.deckOffsetX + pose.x, mmY = MOTION.deckOffsetY + pose.y;
   $("#telemetry-x").textContent = mmX.toFixed(1);
   $("#telemetry-y").textContent = mmY.toFixed(1);
   $("#telemetry-z").textContent = pose.z.toFixed(1);
@@ -330,8 +436,20 @@ function updateUI() {
   $("#timeline").value = state.stepIndex;
   $("#current-action").textContent = step.label;
   $("#cycle-label").textContent = `Source ${step.source + 1}/12 · Plate ${step.plate + 1} · Dest. ${step.columns[0] + 1}–${step.columns[3] + 1}`;
+  updateTimeDisplay();
   $("#play-button").textContent = state.playing ? "Ⅱ" : "▶";
   renderStepList();
+}
+
+function formatDuration(seconds) {
+  const rounded = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function updateTimeDisplay() {
+  $("#time-label").textContent = `${formatDuration(elapsedProtocolSeconds())} / ~${formatDuration(protocolSeconds())}`;
 }
 
 function draw() { drawTop(); drawQuarter(); }
@@ -354,11 +472,12 @@ function animate(time) {
   if (!state.lastTime) state.lastTime = time;
   const delta = time - state.lastTime; state.lastTime = time;
   if (state.playing) {
-    state.progress += delta * state.speed / state.actionDuration;
+    state.progress += delta * state.speed / (actionPlan(state.stepIndex).total * 1000);
     if (state.progress >= 1) {
       if (state.stepIndex >= state.steps.length - 1) { state.progress = 1; state.playing = false; }
       else { state.stepIndex += 1; state.progress = 0; updateUI(); }
     }
+    updateTimeDisplay();
   }
   try {
     draw();
@@ -378,6 +497,19 @@ function parseProtocol(text, filename) {
   const name = nameMatch ? nameMatch[1] : "";
   const api = apiMatch ? apiMatch[1] : "unknown";
   const robot = robotMatch ? robotMatch[1] : "OT-2";
+  const gantryMatch = text.match(/\.default_speed\s*=\s*([0-9.]+)/);
+  const aspirateFlowMatch = text.match(/\.flow_rate\.aspirate\s*=\s*([0-9.]+)/);
+  const dispenseFlowMatch = text.match(/\.flow_rate\.dispense\s*=\s*([0-9.]+)/);
+  const initialVolumeMatch = text.match(/load_liquid\s*\([\s\S]*?volume\s*=\s*([0-9.]+)/);
+  MOTION.gantrySpeed = gantryMatch ? Number(gantryMatch[1]) : 400;
+  MOTION.aspirateFlowRate = aspirateFlowMatch ? Number(aspirateFlowMatch[1]) : 7.6;
+  MOTION.dispenseFlowRate = dispenseFlowMatch ? Number(dispenseFlowMatch[1]) : 7.6;
+  if (initialVolumeMatch) {
+    state.initialVolume = Number(initialVolumeMatch[1]);
+    $("#start-volume").value = state.initialVolume;
+  }
+  $("#gantry-assumption").textContent = `${MOTION.gantrySpeed} mm/s`;
+  $("#flow-assumption").textContent = `${MOTION.aspirateFlowRate}/${MOTION.dispenseFlowRate} µL/s`;
   $("#file-name").textContent = filename;
   $("#file-name").nextElementSibling.textContent = `Python API ${api} · ${robot}`;
   if (name) $("#protocol-title").textContent = name.replace(" - PCR Plate to Omnitrays", "");

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#091219">
   <title>OT-2 Protocol Visualizer</title>
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
   <header class="app-header">
@@ -44,6 +44,17 @@
         <div><p class="eyebrow">Starting volume</p><small>Applied to every source well</small></div>
         <label><input id="start-volume" type="number" min="40" max="200" step="1" value="130"> µL</label>
       </section>
+
+      <details class="estimator-info">
+        <summary>Motion model assumptions</summary>
+        <dl>
+          <div><dt>XY gantry</dt><dd id="gantry-assumption">400 mm/s</dd></div>
+          <div><dt>Z axis</dt><dd>125 mm/s</dd></div>
+          <div><dt>P20 flow</dt><dd id="flow-assumption">7.6 µL/s</dd></div>
+          <div><dt>Safe nozzle Z</dt><dd>111 mm</dd></div>
+          <div><dt>Uncertainty</dt><dd>±20%</dd></div>
+        </dl>
+      </details>
 
       <section class="steps-section">
         <div class="section-title"><span>Protocol actions</span><strong id="step-fraction">1 / 96</strong></div>
@@ -84,7 +95,7 @@
         <button id="play-button" class="play-button" aria-label="Play simulation">▶</button>
         <button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button>
         <div class="timeline-group">
-          <div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</span></div>
+          <div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span><i id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</i><b id="time-label">00:00 / ~00:00</b></span></div>
           <input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action">
         </div>
         <label class="speed-control">Speed
@@ -95,7 +106,7 @@
       <footer class="run-status">
         <span><i class="green"></i><strong>Tip tracking</strong> Active</span>
         <span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span>
-        <span><i class="green"></i><strong>Collision path</strong> Clear</span>
+        <span><i class="green"></i><strong>Motion model</strong> Geometry-based estimate</span>
         <span class="local-badge">Runs locally in your browser</span>
       </footer>
     </section>
@@ -109,6 +120,6 @@
       notice.textContent = "Application error: " + (event.message || "the renderer could not start");
     });
   </script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
