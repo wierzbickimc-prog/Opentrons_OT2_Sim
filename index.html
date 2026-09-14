@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#091219">
+  <title>OT-2 Protocol Visualizer</title>
+  <link rel="stylesheet" href="styles.css?v=3">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-mark" aria-hidden="true"><span></span></div>
+    <div>
+      <h1>OT-2 Protocol Visualizer</h1>
+      <p>Local protocol preview · no robot connection</p>
+    </div>
+    <div class="header-status"><span class="status-dot"></span> Simulation ready</div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="sidebar">
+      <label class="upload-button" for="protocol-file">
+        <span aria-hidden="true">⇧</span> Upload protocol
+      </label>
+      <input id="protocol-file" type="file" accept=".py,text/x-python">
+      <div class="file-card">
+        <div class="file-icon">PY</div>
+        <div><strong id="file-name">colony_rearray.py</strong><small>Python API 2.28 · OT-2</small></div>
+      </div>
+
+      <section class="protocol-info">
+        <p class="eyebrow">Loaded protocol</p>
+        <h2 id="protocol-title">E. coli Colony Rearray</h2>
+        <p id="protocol-description">96-well PCR plate → four agar destination plates</p>
+        <div class="stats-grid">
+          <div><strong>12</strong><span>source columns</span></div>
+          <div><strong>48</strong><span>destination columns</span></div>
+          <div><strong>96</strong><span>actions</span></div>
+          <div><strong>8</strong><span>channels</span></div>
+        </div>
+      </section>
+
+      <section class="volume-settings">
+        <div><p class="eyebrow">Starting volume</p><small>Applied to every source well</small></div>
+        <label><input id="start-volume" type="number" min="40" max="200" step="1" value="130"> µL</label>
+      </section>
+
+      <section class="steps-section">
+        <div class="section-title"><span>Protocol actions</span><strong id="step-fraction">1 / 96</strong></div>
+        <div id="step-list" class="step-list" aria-live="polite"></div>
+      </section>
+
+      <div id="protocol-notice" class="notice" hidden></div>
+    </aside>
+
+    <section class="workspace">
+      <div class="view-grid">
+        <article class="view-panel top-panel">
+          <div class="panel-header">
+            <div><span class="view-kicker">Synchronized view</span><h2>Deck · top-down</h2></div>
+            <div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div>
+          </div>
+          <div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div>
+        </article>
+
+        <article class="view-panel quarter-panel">
+          <div class="panel-header">
+            <div><span class="view-kicker">Realistic motion preview</span><h2>OT-2 · three-quarter</h2></div>
+            <div class="camera-badge">3D&nbsp; ◇</div>
+          </div>
+          <div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div>
+          <div class="telemetry">
+            <div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div>
+            <div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div>
+            <div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div>
+            <div class="tip-meter"><span>TIP VOLUME</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div>
+          </div>
+        </article>
+      </div>
+
+      <section class="transport">
+        <button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button>
+        <button id="previous-button" class="icon-button" title="Previous action" aria-label="Previous action">│◀</button>
+        <button id="play-button" class="play-button" aria-label="Play simulation">▶</button>
+        <button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button>
+        <div class="timeline-group">
+          <div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</span></div>
+          <input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action">
+        </div>
+        <label class="speed-control">Speed
+          <select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        </label>
+      </section>
+
+      <footer class="run-status">
+        <span><i class="green"></i><strong>Tip tracking</strong> Active</span>
+        <span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span>
+        <span><i class="green"></i><strong>Collision path</strong> Clear</span>
+        <span class="local-badge">Runs locally in your browser</span>
+      </footer>
+    </section>
+  </main>
+  <script>
+    window.addEventListener("error", function (event) {
+      var notice = document.getElementById("protocol-notice");
+      if (!notice) return;
+      notice.hidden = false;
+      notice.className = "notice error";
+      notice.textContent = "Application error: " + (event.message || "the renderer could not start");
+    });
+  </script>
+  <script src="app.js?v=3"></script>
+</body>
+</html>
