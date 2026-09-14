@@ -1,0 +1,16 @@
+[Unit]
+Description=OT-2 Protocol Visualizer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/apps/Opentrons_OT2_Sim
+ExecStart=/usr/bin/python3 -m http.server 8766 --bind 127.0.0.1 --directory %h/apps/Opentrons_OT2_Sim
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

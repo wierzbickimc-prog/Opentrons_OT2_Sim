@@ -22,6 +22,8 @@ python3 -m http.server 8080 --bind 0.0.0.0
 
 Then visit `http://HOST_IP:8080` from another machine on the internal network. Use an authenticated reverse proxy before exposing it outside a trusted network.
 
+For a persistent per-user service, copy `deploy/ot2-visualizer.service` to `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, and enable it with `systemctl --user enable --now ot2-visualizer.service`.
+
 ## Prototype scope
 
 - The included rearray workflow contains 96 actions: 8 actions for each of 12 source columns.
