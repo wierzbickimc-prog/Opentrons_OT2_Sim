@@ -3,22 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#091219">
+  <meta name="theme-color" content="#1a0b20">
   <title>OT-2 Manufacturing Tools</title>
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="brand.css?v=1">
 </head>
 <body>
   <header class="app-header">
-    <button id="home-button" class="brand-mark" aria-label="Return to landing screen"><span></span></button>
-    <div><h1 id="app-title">OT-2 Manufacturing Tools</h1><p id="app-subtitle">Protocol planning, generation, and simulation</p></div>
-    <div class="header-status"><span class="status-dot"></span><span id="header-status-text">System ready</span></div>
+    <button id="home-button" class="brand-lockup" aria-label="Return to landing screen">
+      <span class="built-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="built-wordmark"><strong>BUILT</strong><small>BIOTECHNOLOGIES</small></span>
+    </button>
+    <div class="header-page"><h1 id="app-title">OT-2 Manufacturing Tools</h1><p id="app-subtitle">Protocol planning, generation, and simulation</p></div>
+    <div class="header-status"><span class="status-dot"></span><span id="header-status-text">OT-2 WORKSTATION</span></div>
   </header>
 
   <main id="landing-screen" class="landing-screen view-screen">
-    <section class="landing-copy"><p class="eyebrow">Manufacturing operations</p><h2>What would you like to do?</h2><p>Create a production-ready plating work list or inspect an existing OT-2 protocol.</p></section>
+    <section class="landing-copy"><p class="eyebrow">Internal manufacturing tools</p><h2>OT-2 Manufacturing Tools</h2><p>Prepare, verify, and visualize manufacturing runs.</p></section>
     <section class="landing-options">
-      <button id="open-mfg" class="landing-card"><span class="card-icon amber-icon">MFG</span><span><strong>MFG_Plating</strong><small>Map constructs, prepare the deck, and generate an OT-2 protocol.</small></span><b>→</b></button>
-      <button id="open-simulator" class="landing-card"><span class="card-icon cyan-icon">WL</span><span><strong>WL Simulation</strong><small>Upload a Python work list and visualize the complete run.</small></span><b>→</b></button>
+      <button id="open-mfg" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Plating</strong><small>Create a mapped work list and robot-ready protocol.</small></span><b>→</b></button>
+      <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Upload a protocol and inspect every movement.</small></span><b>→</b></button>
     </section>
   </main>
 
@@ -26,6 +30,7 @@
     <section class="mfg-form-panel">
       <button class="back-button" data-route="landing">← All tools</button>
       <p class="eyebrow">New work list</p><h2>MFG_Plating</h2>
+      <div class="stepper" aria-label="Work-list steps"><span class="active"><b>1</b> Run details</span><i></i><span><b>2</b> Deck setup</span><i></i><span><b>3</b> Generate</span></div>
       <p class="form-intro">Generate four 10 µL destination replicates from each construct using a P20 eight-channel GEN2.</p>
       <form id="worklist-form">
         <label class="field-label" for="worklist-id">Unique identifier</label>
@@ -34,7 +39,7 @@
         <label class="field-label" for="construct-count">Number of constructs</label>
         <div class="count-control"><input id="construct-count" class="text-field" type="number" min="1" max="144" value="96" required><span>1–144</span></div>
         <small class="field-help">Mapped A1→H1, then A2→H2. Partial columns use all eight tips; unused channels aspirate air.</small>
-        <button type="submit" class="primary-button">Create work list</button>
+        <button type="submit" class="primary-button">Calculate deck setup</button>
       </form>
       <div id="mfg-status" class="notice" hidden></div>
     </section>
@@ -45,10 +50,10 @@
         <div><strong id="required-sources">1</strong><span>source plate</span></div><div><strong id="required-tips">1</strong><span>tip rack</span></div><div><strong id="required-destinations">4</strong><span>destination plates</span></div><div><strong id="required-actions">96</strong><span>robot actions</span></div>
       </div>
       <div class="setup-grid">
-        <article class="setup-card"><div class="setup-title"><h3>Deck setup</h3><span>Front of robot ↓</span></div><div id="work-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div></article>
+        <article class="setup-card"><div class="setup-title"><h3>OT-2 deck layout</h3><span>Top-down · front ↓</span></div><div id="work-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div><div class="deck-legend"><span class="destination-key">Destination</span><span class="source-key">Source</span><span class="tip-key">Tip rack</span><span class="empty-key">Empty</span></div></article>
         <article class="setup-card mapping-card"><div class="setup-title"><h3>Source mapping</h3><span id="mapping-summary">Column-major order</span></div><div class="mapping-scroll"><table><thead><tr><th>Constructs</th><th>Source</th><th>Destination</th></tr></thead><tbody id="mapping-body"></tbody></table></div></article>
       </div>
-      <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="machine-ready" class="ready-button" disabled>Machine is ready</button></div>
+      <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="machine-ready" class="ready-button" disabled><span>▷</span> Machine is ready</button></div>
       <section id="delivery-panel" class="delivery-panel" hidden>
         <div class="delivery-actions"><button id="download-protocol" class="primary-button">Download Python protocol</button><button id="simulate-worklist" class="secondary-button">Open in WL Simulation</button></div>
         <form id="robot-upload-form" class="robot-upload-form">
@@ -73,8 +78,8 @@
     </aside>
     <section class="workspace">
       <div class="view-grid">
-        <article class="view-panel top-panel"><div class="panel-header"><div><span class="view-kicker">Synchronized view</span><h2>Deck · top-down</h2></div><div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div></div><div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div></article>
-        <article class="view-panel quarter-panel"><div class="panel-header"><div><span class="view-kicker">Realistic motion preview</span><h2>OT-2 · three-quarter</h2></div><div class="camera-badge">3D&nbsp; ◇</div></div><div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div><div class="telemetry"><div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div><div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div><div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div><div class="tip-meter"><span>TIP LIQUID</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div></div></article>
+        <article class="view-panel top-panel"><div class="panel-header"><div><span class="view-kicker">Live simulation</span><h2>TOP-DOWN DECK</h2></div><div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div></div><div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div></article>
+        <article class="view-panel quarter-panel"><div class="panel-header"><div><span class="view-kicker">Live simulation</span><h2>THREE-QUARTER VIEW</h2></div><div class="camera-badge">3D&nbsp; ◇</div></div><div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div><div class="telemetry"><div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div><div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div><div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div><div class="tip-meter"><span>TIP LIQUID</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div></div></article>
       </div>
       <section class="transport"><button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button><button id="previous-button" class="icon-button" title="Previous action" aria-label="Previous action">│◀</button><button id="play-button" class="play-button" aria-label="Play simulation">▶</button><button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button><div class="timeline-group"><div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span><i id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</i><b id="time-label">00:00 / ~00:00</b></span></div><input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action"></div><label class="speed-control">Speed<select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></section>
       <footer class="run-status"><span><i class="green"></i><strong>Tip tracking</strong> Active</span><span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span><span><i class="green"></i><strong>Motion model</strong> Geometry-based estimate</span><span class="local-badge">Protocol stays local until submitted</span></footer>
@@ -82,6 +87,6 @@
   </main>
   <div id="global-error" class="global-error" hidden></div>
   <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 "use strict";
 
 const COLORS = {
-  deck: "#1b252b", deckEdge: "#61727a", slot: "#111a1f", slotEdge: "#34454e",
-  plate: "#d6e0e4", plateEdge: "#82949c", well: "#31434d", source: "#ffc247",
-  destination: "#20d4e6", liquid: "#1aaee8", tip: "#e9f4cf", robot: "#dbe2e5",
-  robotShade: "#87969d", dark: "#071017", path: "#25d8ea"
+  deck: "#29232d", deckEdge: "#76677b", slot: "#171219", slotEdge: "#4f4553",
+  plate: "#d9d4dc", plateEdge: "#928899", well: "#423848", source: "#f000dc",
+  destination: "#41d8f2", liquid: "#b44cff", tip: "#eadcff", robot: "#e5e2e6",
+  robotShade: "#928c95", dark: "#100a13", path: "#f000dc"
 };
 
 // OT-2 deck and labware geometry, in millimeters. Labware coordinates are
@@ -276,7 +276,7 @@ function slotPosition(slot, box) {
 function drawPlateTop(ctx, x, y, w, h, type, values, highlightedColumns = []) {
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
-  roundedRect(ctx, x, y, w, h, 7); ctx.fillStyle = type === "tips" ? "#303a31" : COLORS.plate; ctx.fill();
+  roundedRect(ctx, x, y, w, h, 7); ctx.fillStyle = type === "tips" ? "#372d3d" : COLORS.plate; ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = COLORS.plateEdge; ctx.lineWidth = 1; ctx.stroke();
   const padX = w * .09, padY = h * .12;
   const dx = (w - 2 * padX) / 11, dy = (h - 2 * padY) / 7;
@@ -288,18 +288,18 @@ function drawPlateTop(ctx, x, y, w, h, type, values, highlightedColumns = []) {
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       if (type === "tips") {
         const used = values.has(col);
-        ctx.fillStyle = used ? "#182126" : "#d7e64a";
+        ctx.fillStyle = used ? "#211a25" : "#d8b6ff";
       } else if (type === "source") {
         const volume = values[col][row];
         const alpha = .22 + .72 * Math.max(0, volume) / state.initialVolume;
-        ctx.fillStyle = volume > 0 ? `rgba(255, 194, 71, ${alpha})` : "#52636b";
+        ctx.fillStyle = volume > 0 ? `rgba(240, 0, 220, ${alpha})` : "#65586a";
       } else {
         const volume = values[col][row];
-        ctx.fillStyle = volume > 0 ? `rgba(32, 212, 230, ${.25 + volume / 16})` : "#71848d";
+        ctx.fillStyle = volume > 0 ? `rgba(65, 216, 242, ${.25 + volume / 16})` : "#786d7c";
       }
       ctx.fill();
       ctx.lineWidth = active ? 1.5 : .6;
-      ctx.strokeStyle = active ? (type === "source" ? COLORS.source : COLORS.destination) : "rgba(9,25,33,.65)";
+      ctx.strokeStyle = active ? (type === "source" ? COLORS.source : COLORS.destination) : "rgba(24,12,28,.68)";
       ctx.stroke();
     }
   }
@@ -316,13 +316,13 @@ function drawTop() {
   const box = { x: x + deckW * .07, y: y + deckH * .06, slotW: deckW * .286, slotH: deckH * .224 };
   roundedRect(ctx, x, y, deckW, deckH, 16); ctx.fillStyle = COLORS.deck; ctx.fill();
   ctx.strokeStyle = COLORS.deckEdge; ctx.lineWidth = 2; ctx.stroke();
-  ctx.fillStyle = "#83939a"; ctx.font = "600 9px system-ui"; ctx.textAlign = "left";
+  ctx.fillStyle = "#a596aa"; ctx.font = "600 9px system-ui"; ctx.textAlign = "left";
   const liquids = derivedState(); const current = state.steps[state.stepIndex];
   const workflow = state.workflow;
 
   for (let slot = 1; slot <= 12; slot += 1) {
     const p = slotPosition(slot, box); const sw = box.slotW * .92, sh = box.slotH * .84;
-    ctx.fillStyle = "#72828a"; ctx.fillText(String(slot), p.x + 2, p.y + 10);
+    ctx.fillStyle = "#97879c"; ctx.fillText(String(slot), p.x + 2, p.y + 10);
     roundedRect(ctx, p.x + 10, p.y + 3, sw - 12, sh - 5, 6); ctx.fillStyle = COLORS.slot; ctx.fill(); ctx.strokeStyle = COLORS.slotEdge; ctx.stroke();
     const lx = p.x + 14, ly = p.y + 7, lw = sw - 20, lh = sh - 13;
     const destinationIndex = workflow.destinationSlots.indexOf(slot);
@@ -336,8 +336,8 @@ function drawTop() {
     } else if (tipIndex >= 0) {
       drawPlateTop(ctx, lx, ly, lw, lh, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : []);
     } else if (slot === 12) {
-      roundedRect(ctx, lx, ly, lw, lh, 7); ctx.fillStyle = "#080c0f"; ctx.fill(); ctx.strokeStyle = "#47555b"; ctx.stroke();
-      ctx.fillStyle = "#87979f"; ctx.textAlign = "center"; ctx.font = "700 8px system-ui"; ctx.fillText("FIXED TRASH", lx + lw / 2, ly + lh / 2 + 3); ctx.textAlign = "left";
+      roundedRect(ctx, lx, ly, lw, lh, 7); ctx.fillStyle = "#0e0a10"; ctx.fill(); ctx.strokeStyle = "#5c5260"; ctx.stroke();
+      ctx.fillStyle = "#a094a4"; ctx.textAlign = "center"; ctx.font = "700 8px system-ui"; ctx.fillText("FIXED TRASH", lx + lw / 2, ly + lh / 2 + 3); ctx.textAlign = "left";
     }
   }
 
@@ -349,7 +349,7 @@ function drawTop() {
   ctx.beginPath();
   ctx.moveTo(box.x + prev.x / 397.5 * box.slotW * 3, box.y + (4 - prev.y / MOTION.slotPitchY) * box.slotH);
   ctx.lineTo(box.x + dest.x / 397.5 * box.slotW * 3, box.y + (4 - dest.y / MOTION.slotPitchY) * box.slotH); ctx.stroke();
-  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fillStyle = "rgba(32,212,230,.18)"; ctx.fill(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
+  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fillStyle = "rgba(240,0,220,.18)"; ctx.fill(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
   if (["source", "destination", "tips"].includes(current.location.kind)) {
     const pyH = box.y + (4 - (pose.y - 7 * MOTION.wellPitch) / MOTION.slotPitchY) * box.slotH;
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, pyH); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
@@ -381,15 +381,15 @@ function drawPlateIso(ctx, slot, type, values, highlighted, view) {
   const col = (slot - 1) % 3, row = Math.floor((slot - 1) / 3);
   const x = col * MOTION.slotPitchX, y = row * MOTION.slotPitchY;
   const h = type === "tips" ? 64.69 : type === "source" ? 16 : 14.22;
-  prism(ctx, x, y, 0, 127.76, 85.48, h, view, { top: type === "tips" ? "#39443a" : "#bfcbd0", side: "#65757c", front: "#778890", edge: "#17242b" });
+  prism(ctx, x, y, 0, 127.76, 85.48, h, view, { top: type === "tips" ? "#403449" : "#cfc9d2", side: "#706675", front: "#887d8c", edge: "#241a29" });
   for (let c = 0; c < 12; c += 1) {
     for (let r = 0; r < 8; r += 1) {
       const point = isoProject(x + MOTION.wellA1X + c * MOTION.wellPitch, y + MOTION.wellA1Y - r * MOTION.wellPitch, h + .6, view);
       const rx = Math.max(1.3, view.width / 720 * 2.2), ry = rx * .55;
       ctx.beginPath(); ctx.ellipse(point.x, point.y, rx, ry, 0, 0, Math.PI * 2);
-      if (type === "tips") ctx.fillStyle = values.has(c) ? "#263139" : "#ddea55";
-      else if (type === "source") ctx.fillStyle = values[c][r] > 0 ? `rgba(255,194,71,${.3 + values[c][r] / 200})` : "#52636b";
-      else ctx.fillStyle = values[c][r] > 0 ? "#20d4e6" : "#6d7f87";
+      if (type === "tips") ctx.fillStyle = values.has(c) ? "#2b2330" : "#dabaff";
+      else if (type === "source") ctx.fillStyle = values[c][r] > 0 ? `rgba(240,0,220,${.3 + values[c][r] / 200})` : "#65586a";
+      else ctx.fillStyle = values[c][r] > 0 ? "#41d8f2" : "#786d7c";
       ctx.fill();
       if (highlighted.includes(c)) { ctx.strokeStyle = type === "source" ? COLORS.source : COLORS.destination; ctx.lineWidth = 1.2; ctx.stroke(); }
     }
@@ -402,8 +402,8 @@ function drawQuarter() {
   const liquids = derivedState(); const current = state.steps[state.stepIndex];
   const workflow = state.workflow;
   const deckCorners = [[0,0],[397.5,0],[397.5,362],[0,362]].map(([x,y]) => isoProject(x,y,0,view));
-  polygon(ctx, deckCorners, "#222d32", "#74848b");
-  prism(ctx, -17, -12, -18, 432, 392, 18, view, { top: "#334047", side: "#121a1e", front: "#536168", edge: "#11191d" });
+  polygon(ctx, deckCorners, "#29232d", "#807184");
+  prism(ctx, -17, -12, -18, 432, 392, 18, view, { top: "#3c3341", side: "#18111c", front: "#625767", edge: "#130d16" });
 
   for (let row = 3; row >= 0; row -= 1) {
     for (let col = 2; col >= 0; col -= 1) {
@@ -414,7 +414,7 @@ function drawQuarter() {
       if (destinationIndex >= 0) drawPlateIso(ctx, slot, "destination", liquids.destinations[destinationIndex], current.plate === destinationIndex ? current.columns : [], view);
       if (sourceIndex >= 0) drawPlateIso(ctx, slot, "source", liquids.sources[sourceIndex], current.sourcePlate === sourceIndex ? [current.sourceColumn] : [], view);
       if (tipIndex >= 0) drawPlateIso(ctx, slot, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : [], view);
-      if (slot === 12) prism(ctx, col * 132.5 + 8, row * 90.5 + 5, 4, 118, 78, 48, view, { top: "#070b0d", side: "#11181c", front: "#1c252a", edge: "#56656b" });
+      if (slot === 12) prism(ctx, col * 132.5 + 8, row * 90.5 + 5, 4, 118, 78, 48, view, { top: "#0d090f", side: "#171019", front: "#241b27", edge: "#625766" });
     }
   }
 
@@ -677,7 +677,7 @@ def run(protocol: protocol_api.ProtocolContext):
     p20_multi = protocol.load_instrument("p20_multi_gen2", "left", tip_racks=tip_racks)
 
     culture = protocol.define_liquid(
-        name="E. coli culture", description=WORKLIST_ID, display_color="#FFC247"
+        name="E. coli culture", description=WORKLIST_ID, display_color="#F000DC"
     )
     # wells() follows column-major order: A1-H1, then A2-H2.
     for construct_index in range(CONSTRUCT_COUNT):
