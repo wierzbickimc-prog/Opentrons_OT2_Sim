@@ -161,8 +161,16 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
         morsel = cookie.get(SESSION_COOKIE)
         return morsel.value if morsel else ""
 
+    def client_ip(self) -> str:
+        """Visitor address; behind a local reverse proxy (Tailscale Serve/Funnel) use X-Forwarded-For."""
+        address = self.client_address[0]
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        if forwarded and ipaddress.ip_address(address).is_loopback:
+            return forwarded.split(",")[0].strip()[:64] or address
+        return address
+
     def handle_login(self) -> None:
-        client = self.client_address[0]
+        client = self.client_ip()
         try:
             if not site_password():
                 raise RequestError(404, "Sign-in is not enabled on this server.")

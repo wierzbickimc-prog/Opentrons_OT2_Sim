@@ -64,7 +64,7 @@ class SiteLoginTests(unittest.TestCase):
     def setUp(self):
         server.LOGIN_FAILURES.clear()
 
-    def request(self, path, data=None, cookie=None):
+    def request(self, path, data=None, cookie=None, forwarded=None):
         import urllib.request
 
         class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -74,6 +74,8 @@ class SiteLoginTests(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         if cookie:
             headers["Cookie"] = cookie
+        if forwarded:
+            headers["X-Forwarded-For"] = forwarded
         body = json.dumps(data).encode() if data is not None else None
         opener = urllib.request.build_opener(NoRedirect)
         try:
@@ -110,6 +112,12 @@ class SiteLoginTests(unittest.TestCase):
         forged = f"{server.SESSION_COOKIE}={int(__import__('time').time()) + 3600}.deadbeef"
         self.assertEqual(self.request("/api/health", cookie=forged)[0], 401)
         self.assertFalse(server.valid_session(server.issue_session(now=0), now=server.SESSION_SECONDS + 1))
+
+    def test_lockout_is_per_visitor_behind_a_proxy(self):
+        for _ in range(server.LOGIN_MAX_FAILURES):
+            self.request("/api/login", {"password": "9999"}, forwarded="203.0.113.7")
+        self.assertEqual(self.request("/api/login", {"password": "0000"}, forwarded="203.0.113.7")[0], 429)
+        self.assertEqual(self.request("/api/login", {"password": "0000"}, forwarded="198.51.100.4")[0], 200)
 
     def test_repeated_failures_are_rate_limited(self):
         for _ in range(server.LOGIN_MAX_FAILURES):
