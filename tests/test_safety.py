@@ -114,6 +114,11 @@ class LiquidChecks(unittest.TestCase):
     def test_aspirating_more_than_the_well_holds_warns(self):
         self.assertEqual(codes(self.liquid_protocol({"A1": 50}, 100)), ["aspirate-insufficient"])
 
+    def test_small_overdraw_to_empty_a_well_is_informational(self):
+        findings = safety.evaluate(self.liquid_protocol({"A1": 65}, 66))["findings"]
+        self.assertEqual([(f["severity"], f["code"]) for f in findings], [("info", "aspirate-overdraw")])
+        self.assertEqual(codes(self.liquid_protocol({"A1": 65}, 67.5)), ["aspirate-insufficient"])
+
     def test_aspirating_above_the_liquid_surface_warns(self):
         # 50 µL in a 6 mm well is about 1.8 mm deep; the tip end is at 12 mm.
         self.assertEqual(codes(self.liquid_protocol({"A1": 50}, 20, tip_end_z=12)), ["aspirate-above-liquid"])

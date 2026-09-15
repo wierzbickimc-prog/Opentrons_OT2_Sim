@@ -353,10 +353,12 @@ function animate(time) {
 function routeTo(route) {
   $("#landing-screen").hidden = route !== "landing";
   $("#mfg-screen").hidden = route !== "mfg";
+  $("#amp-screen").hidden = route !== "amp";
   $("#simulator-screen").hidden = route !== "simulator";
   const labels = {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
+    amp: ["PCR->AMP plate transfer", "96-well PCR plates into a 384-well Echo plate"],
     simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"]
   };
   $("#app-title").textContent = labels[route][0];
@@ -611,48 +613,197 @@ $("#machine-ready").addEventListener("click", () => {
 
 $("#download-protocol").addEventListener("click", () => {
   if (!draftWorkflow || !state.generatedProtocol) return;
-  const blob = new Blob([state.generatedProtocol], { type: "text/x-python;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url; link.download = safeFilename(draftWorkflow.identifier);
-  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-  showMfgStatus(`Downloaded ${link.download}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
+  const filename = safeFilename(draftWorkflow.identifier);
+  downloadProtocol(filename, state.generatedProtocol);
+  showMfgStatus(`Downloaded ${filename}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
 });
 
 
 $("#simulate-worklist").addEventListener("click", () => {
   if (!draftWorkflow || !state.generatedProtocol) return;
-  if (!$("#sim-pin").value && $("#upload-pin").value) $("#sim-pin").value = $("#upload-pin").value;
-  routeTo("simulator");
-  runSimulation({ filename: safeFilename(draftWorkflow.identifier), protocol: state.generatedProtocol });
+  openInSimulation(safeFilename(draftWorkflow.identifier), state.generatedProtocol, $("#upload-pin"));
 });
 
-$("#robot-upload-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!draftWorkflow || !state.generatedProtocol) return;
-  const button = $("#upload-to-robot");
+function openInSimulation(filename, protocol, uploadPin) {
+  if (!$("#sim-pin").value && uploadPin.value) $("#sim-pin").value = uploadPin.value;
+  routeTo("simulator");
+  runSimulation({ filename, protocol });
+}
+
+function downloadProtocol(filename, protocol) {
+  const blob = new Blob([protocol], { type: "text/x-python;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = filename;
+  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+}
+
+async function uploadToRobot({ button, address, pin, filename, protocol, worklistId, report }) {
   button.disabled = true; button.textContent = "Uploading…";
   try {
     const response = await apiFetch("./api/ot2/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        robotAddress: $("#robot-address").value.trim(),
-        pin: $("#upload-pin").value,
-        filename: safeFilename(draftWorkflow.identifier),
-        protocol: state.generatedProtocol,
-        worklistId: draftWorkflow.identifier
-      })
+      body: JSON.stringify({ robotAddress: address.value.trim(), pin: pin.value, filename, protocol, worklistId })
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Upload failed (${response.status})`);
-    showMfgStatus(`Uploaded to OT-2 for analysis. Protocol ID: ${result.protocolId || "returned by robot"}. Open the OT-2 App to review setup and start the run.`, false);
-    $("#upload-pin").value = "";
+    report(`Uploaded to OT-2 for analysis. Protocol ID: ${result.protocolId || "returned by robot"}. Open the OT-2 App to review setup and start the run.`, false);
+    pin.value = "";
   } catch (error) {
-    showMfgStatus(error.message, true);
+    report(error.message, true);
   } finally {
     button.disabled = false; button.textContent = "Upload to OT-2";
   }
+}
+
+$("#robot-upload-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!draftWorkflow || !state.generatedProtocol) return;
+  uploadToRobot({
+    button: $("#upload-to-robot"), address: $("#robot-address"), pin: $("#upload-pin"),
+    filename: safeFilename(draftWorkflow.identifier), protocol: state.generatedProtocol,
+    worklistId: draftWorkflow.identifier, report: showMfgStatus
+  });
+});
+
+// ------------------------------------------------------- PCR->AMP transfer
+
+let ampCsv = "";
+let ampPlan = null;
+let ampConfirmed = false;
+
+function showAmpStatus(message, isError, details = []) {
+  const status = $("#amp-status");
+  status.hidden = false;
+  status.classList.toggle("error", Boolean(isError));
+  status.innerHTML = escapeHtml(message) + (details.length ? `<ul>${details.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "");
+}
+
+function resetAmpPlan() {
+  ampPlan = null;
+  ampConfirmed = false;
+  $("#amp-machine-ready").disabled = true;
+  $("#amp-delivery-panel").hidden = true;
+  $("#amp-state").textContent = "Draft";
+  $("#amp-state").classList.remove("ready");
+}
+
+function ampDeckItem(plan, slot) {
+  const source = plan.sourcePlates.find((plate) => plate.slot === slot);
+  const tips = plan.tipSlots.indexOf(slot);
+  if (slot === plan.destinationSlot) return { type: "destination", label: plan.destinationPlate || "Echo plate", detail: "Echo 384PP" };
+  if (source) return { type: "source", label: source.name, detail: `PCR plate · quadrant ${source.quadrant}` };
+  if (tips >= 0) return { type: "tips", label: `Tip rack ${tips + 1}`, detail: "200 µL filter tips" };
+  if (slot === 12) return { type: "trash", label: "Fixed trash", detail: "Built in" };
+  return { type: "empty", label: "Empty", detail: "" };
+}
+
+function renderAmpPlan(plan) {
+  $("#amp-output-title").textContent = plan.identifier;
+  $("#amp-required-sources").textContent = plan.sourcePlates.length;
+  $("#amp-required-tips").textContent = plan.tipSlots.length;
+  $("#amp-required-samples").textContent = plan.sampleCount;
+  $("#amp-required-actions").textContent = plan.transfers.length;
+  $("#amp-mapping-summary").textContent = plan.sourcePlates.map((plate) => `${plate.name} → quadrant ${plate.quadrant}`).join(" · ");
+  const deckOrder = [10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3];
+  $("#amp-deck").innerHTML = deckOrder.map((slot) => {
+    const item = ampDeckItem(plan, slot);
+    return `<div class="deck-slot ${item.type}"><b>${slot}</b><div><span>${escapeHtml(item.label)}</span><small>${escapeHtml(item.detail)}</small></div></div>`;
+  }).join("");
+  const names = Object.fromEntries(plan.sourcePlates.map((plate) => [plate.number, plate.name]));
+  $("#amp-mapping-body").innerHTML = plan.transfers.map((transfer) => {
+    const count = transfer.wells.length;
+    const wells = `${transfer.wells[0]}–${transfer.wells[count - 1]}${count < 8 ? ` (${count} of 8)` : ""}`;
+    const destinations = `${transfer.destinations[0]}–${transfer.destinations[count - 1]}, every other row`;
+    return `<tr><td>${escapeHtml(names[transfer.plate])} · column ${transfer.column}</td><td>${escapeHtml(wells)}</td><td>${escapeHtml(count > 1 ? destinations : transfer.destinations[0])}</td></tr>`;
+  }).join("");
+}
+
+async function calculateAmpPlan({ fillIdentifier = false } = {}) {
+  if (!ampCsv) { showAmpStatus("Choose a PCR plan CSV.", true); return; }
+  resetAmpPlan();
+  showAmpStatus("Checking the PCR plan…", false);
+  try {
+    const response = await apiFetch("./api/pcr-amp/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        csv: ampCsv,
+        identifier: fillIdentifier ? "" : $("#amp-id").value.trim(),
+        transferVolume: Number($("#amp-transfer-volume").value),
+        startingVolume: Number($("#amp-starting-volume").value)
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) { showAmpStatus(result.error || `Planning failed (${response.status})`, true, result.errors || []); return; }
+    ampPlan = result;
+    if (fillIdentifier || !$("#amp-id").value.trim()) $("#amp-id").value = result.identifier;
+    renderAmpPlan(result);
+    $("#amp-machine-ready").disabled = false;
+    $("#amp-state").textContent = "Setup calculated";
+    const plates = result.sourcePlates.length;
+    showAmpStatus(`Mapped ${result.sampleCount} wells from ${plates} PCR plate${plates === 1 ? "" : "s"} in ${result.transfers.length} column transfers. Verify the deck before continuing.`, false, result.warnings);
+  } catch (error) {
+    showAmpStatus(error.message, true);
+  }
+}
+
+$("#open-amp").addEventListener("click", () => routeTo("amp"));
+
+$("#amp-csv").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    ampCsv = await readLocalFile(file);
+    $("#amp-csv-name").textContent = file.name;
+    await calculateAmpPlan({ fillIdentifier: true });
+  } catch (error) {
+    showAmpStatus(error.message, true);
+  }
+});
+
+["#amp-id", "#amp-transfer-volume", "#amp-starting-volume"].forEach((selector) => $(selector).addEventListener("input", () => {
+  if (!ampPlan) return;
+  resetAmpPlan();
+  showAmpStatus("Work-list details changed. Calculate the deck setup again before confirming the deck.", false);
+}));
+
+$("#amp-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!$("#amp-id").value.trim() && ampCsv) { showAmpStatus("Enter a unique identifier.", true); return; }
+  calculateAmpPlan();
+});
+
+$("#amp-machine-ready").addEventListener("click", () => {
+  if (!ampPlan) return;
+  ampConfirmed = true;
+  $("#amp-delivery-panel").hidden = false;
+  $("#amp-state").textContent = "Machine ready";
+  $("#amp-state").classList.add("ready");
+  $("#amp-machine-ready").disabled = true;
+  showAmpStatus("Machine readiness confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
+});
+
+$("#amp-download").addEventListener("click", () => {
+  if (!ampPlan || !ampConfirmed) return;
+  downloadProtocol(ampPlan.filename, ampPlan.protocol);
+  showAmpStatus(`Downloaded ${ampPlan.filename}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
+});
+
+$("#amp-simulate").addEventListener("click", () => {
+  if (!ampPlan || !ampConfirmed) return;
+  openInSimulation(ampPlan.filename, ampPlan.protocol, $("#amp-upload-pin"));
+});
+
+$("#amp-robot-upload-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!ampPlan || !ampConfirmed) return;
+  uploadToRobot({
+    button: $("#amp-upload-to-robot"), address: $("#amp-robot-address"), pin: $("#amp-upload-pin"),
+    filename: ampPlan.filename, protocol: ampPlan.protocol, worklistId: ampPlan.identifier, report: showAmpStatus
+  });
 });
 
 

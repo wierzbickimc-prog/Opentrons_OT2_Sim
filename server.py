@@ -26,6 +26,8 @@ from pathlib import Path
 from http.cookies import SimpleCookie
 from urllib.parse import unquote, urlparse
 
+from worklists import pcr_amp
+
 
 ROOT = Path(__file__).resolve().parent
 MAX_REQUEST_BYTES = 2_000_000
@@ -112,6 +114,9 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             return
         if path.endswith("/api/simulate"):
             self.handle_simulate()
+            return
+        if path.endswith("/api/pcr-amp/plan"):
+            self.handle_pcr_amp_plan()
             return
         if not path.endswith("/api/ot2/upload"):
             self.send_json(404, {"error": "Not found"})
@@ -230,6 +235,25 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self.log_error("Simulation failed: %s", exc)
             self.send_json(500, {"error": "The simulator failed unexpectedly. Check the server log."})
+
+    def handle_pcr_amp_plan(self) -> None:
+        try:
+            request = self.read_json_request()
+            csv_text = request.get("csv", "")
+            if not isinstance(csv_text, str) or not csv_text.strip():
+                raise RequestError(400, "Upload a PCR plan CSV.")
+            identifier = request.get("identifier", "")
+            plan = pcr_amp.plan_transfer(
+                csv_text,
+                identifier=identifier if isinstance(identifier, str) else "",
+                transfer_volume=request.get("transferVolume", pcr_amp.DEFAULT_TRANSFER_UL),
+                starting_volume=request.get("startingVolume", pcr_amp.DEFAULT_STARTING_UL),
+            )
+            self.send_json(200, plan)
+        except pcr_amp.PlanError as exc:
+            self.send_json(422, {"error": "The PCR plan cannot be transferred.", "errors": exc.errors})
+        except RequestError as exc:
+            self.send_json(exc.status, {"error": exc.message})
 
     def read_json_request(self) -> dict:
         try:

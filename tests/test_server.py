@@ -122,6 +122,21 @@ class SiteLoginTests(unittest.TestCase):
         self.assertEqual(self.request("/api/login", {"password": "0000"}, forwarded="203.0.113.7")[0], 429)
         self.assertEqual(self.request("/api/login", {"password": "0000"}, forwarded="198.51.100.4")[0], 200)
 
+    def test_pcr_amp_plan_returns_protocol_or_every_sheet_error(self):
+        cookie = self.sign_in()
+        self.assertEqual(self.request("/api/pcr-amp/plan", {"csv": "x"})[0], 401)
+        csv_text = (Path(__file__).parent / "fixtures" / "LAB2446_pcr_plan.csv").read_text()
+        status, _, body = self.request("/api/pcr-amp/plan", {"csv": csv_text, "transferVolume": 66, "startingVolume": 65}, cookie=cookie)
+        self.assertEqual(status, 200)
+        plan = json.loads(body)
+        self.assertEqual((plan["identifier"], plan["filename"], len(plan["transfers"])), ("LAB2446_AMP", "LAB2446_AMP.py", 15))
+        self.assertTrue(plan["protocol"].startswith("from opentrons import protocol_api"))
+        bad = "dest_pcr_plate,dest_well_384,dest_well_96\nRUN_PCR_1,A1,A1\nRUN_PCR_9,A1,A1\n"
+        status, _, body = self.request("/api/pcr-amp/plan", {"csv": bad, "transferVolume": 5}, cookie=cookie)
+        self.assertEqual(status, 422)
+        self.assertEqual(len(json.loads(body)["errors"]), 2)
+        self.assertEqual(self.request("/api/pcr-amp/plan", {"csv": ""}, cookie=cookie)[0], 400)
+
     def test_repeated_failures_are_rate_limited(self):
         for _ in range(server.LOGIN_MAX_FAILURES):
             self.assertEqual(self.request("/api/login", {"password": "9999"})[0], 401)

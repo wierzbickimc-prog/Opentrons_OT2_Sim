@@ -8,9 +8,13 @@ import json
 import subprocess
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from worklists import pcr_amp  # noqa: E402
+from tests.test_pcr_amp import full_four_plate_sheet  # noqa: E402
 SIM_PYTHON = ROOT / ".venv-sim" / "bin" / "python"
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -50,6 +54,38 @@ class EngineSimulationTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["safety"]["status"], "pass")
         self.assertEqual(self.codes(result, "info"), {"air-aspirate-empty-well"})
+
+    def echo_dispensed(self, result):
+        echo = next(lw["id"] for lw in result["labware"] if lw["loadName"] == "labcyte_echo_384pp")
+        wells = {}
+        for event in result["safety"]["liquid"]["events"]:
+            for change in event["wells"]:
+                if change["labware"] == echo:
+                    wells[change["well"]] = wells.get(change["well"], 0) + change["delta"]
+        return wells
+
+    def test_pcr_amp_sample_sheet_fills_the_mapped_echo_wells(self):
+        result = simulate(FIXTURES / "pcr_amp_LAB2446.py")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["safety"]["status"], "pass")
+        self.assertEqual(self.codes(result, "info"), {"aspirate-overdraw", "air-aspirate-empty-well"})
+        plan = pcr_amp.plan_transfer((FIXTURES / "LAB2446_pcr_plan.csv").read_text())
+        expected = {well for transfer in plan["transfers"] for well in transfer["destinations"]}
+        dispensed = self.echo_dispensed(result)
+        self.assertEqual(set(dispensed), expected)
+        self.assertTrue(all(abs(volume - 65) < 1e-6 for volume in dispensed.values()))
+
+    def test_pcr_amp_four_full_plates_use_every_echo_well_and_tip(self):
+        plan = pcr_amp.plan_transfer(full_four_plate_sheet(), transfer_volume=65, starting_volume=65)
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol = Path(tmp) / "four_plates.py"
+            protocol.write_text(plan["protocol"])
+            result = simulate(protocol)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["safety"]["status"], "pass")
+        self.assertEqual(result["safety"]["findings"], [])
+        self.assertEqual(len(self.echo_dispensed(result)), 384)
+        self.assertEqual(sum(1 for c in result["commands"] if c["type"] == "pickUpTip"), 48)
 
     def test_fixtures_report_expected_findings(self):
         expected = {

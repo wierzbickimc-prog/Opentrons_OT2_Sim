@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#1a0b20">
   <title>OT-2 Manufacturing Tools</title>
   <script>if (!/\/$|\.html$/.test(location.pathname)) location.replace(location.pathname + "/" + location.search);</script>
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=9">
   <link rel="stylesheet" href="brand.css?v=3">
 </head>
 <body>
@@ -24,6 +24,7 @@
     <section class="landing-copy"><p class="eyebrow">Internal manufacturing tools</p><h2>OT-2 Manufacturing Tools</h2><p>Prepare, verify, and visualize manufacturing runs.</p></section>
     <section class="landing-options">
       <button id="open-mfg" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Plating</strong><small>Create a mapped work list and robot-ready protocol.</small></span><b>→</b></button>
+      <button id="open-amp" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>PCR-&gt;AMP plate transfer</strong><small>Rearray 96-well PCR plates into a 384-well Echo plate from a PCR plan CSV.</small></span><b>→</b></button>
       <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Run a protocol on the OT-2 engine: motion, G-code, and safety checks.</small></span><b>→</b></button>
     </section>
   </main>
@@ -68,6 +69,51 @@
     </section>
   </main>
 
+  <main id="amp-screen" class="mfg-screen view-screen" hidden>
+    <section class="mfg-form-panel">
+      <button class="back-button" data-route="landing">← All tools</button>
+      <p class="eyebrow">New work list</p><h2>PCR-&gt;AMP plate transfer</h2>
+      <div class="stepper" aria-label="Work-list steps"><span class="active"><b>1</b> PCR plan</span><i></i><span><b>2</b> Deck setup</span><i></i><span><b>3</b> Generate</span></div>
+      <p class="form-intro">Move each 96-well PCR column into every other row of one Echo 384PP plate using a P300 eight-channel GEN2 with 200 µL filter tips. Up to four PCR plates.</p>
+      <form id="amp-form">
+        <label class="field-label" for="amp-csv">PCR plan CSV</label>
+        <label class="upload-button" for="amp-csv"><span aria-hidden="true">⇧</span> <span id="amp-csv-name">Choose CSV</span></label><input id="amp-csv" class="file-input" type="file" accept=".csv,text/csv">
+        <small class="field-help">Uses dest_pcr_plate (Q, plate number suffix _1–_4), dest_well_384 (S), dest_well_96 (T), and dest_plate (AI).</small>
+        <label class="field-label" for="amp-id">Unique identifier</label>
+        <input id="amp-id" class="text-field" type="text" maxlength="80" required placeholder="Filled from dest_plate">
+        <small class="field-help">Included in protocol metadata and the downloaded filename.</small>
+        <label class="field-label" for="amp-transfer-volume">Transfer volume (µL)</label>
+        <div class="count-control"><input id="amp-transfer-volume" class="text-field" type="number" min="20" max="200" step="0.1" value="66" required><span>Aspirated per well</span></div>
+        <small class="field-help">66 µL from 65 µL wells collects all of the volume. Above 65 µL exceeds the Echo 384PP working maximum.</small>
+        <label class="field-label" for="amp-starting-volume">PCR well volume (µL)</label>
+        <div class="count-control"><input id="amp-starting-volume" class="text-field" type="number" min="1" max="200" step="0.1" value="65" required><span>Per well before transfer</span></div>
+        <button type="submit" class="primary-button">Calculate deck setup</button>
+      </form>
+      <div id="amp-status" class="notice" hidden></div>
+    </section>
+
+    <section class="worklist-output">
+      <div class="output-heading"><div><p class="eyebrow">Calculated setup</p><h2 id="amp-output-title">Upload a PCR plan</h2></div><span id="amp-state" class="state-chip">Draft</span></div>
+      <div class="requirement-cards">
+        <div><strong id="amp-required-sources">—</strong><span>PCR plates</span></div><div><strong id="amp-required-tips">—</strong><span>filter tip racks</span></div><div><strong id="amp-required-samples">—</strong><span>wells transferred</span></div><div><strong id="amp-required-actions">—</strong><span>column transfers</span></div>
+      </div>
+      <div class="setup-grid">
+        <article class="setup-card"><div class="setup-title"><h3>OT-2 deck layout</h3><span>Top-down · front ↓</span></div><div id="amp-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div><div class="deck-legend"><span class="destination-key">Echo 384PP</span><span class="source-key">PCR plate</span><span class="tip-key">Tip rack</span><span class="empty-key">Empty</span></div><p class="deck-note">The Echo 384PP labware definition uses nominal SLAS 384-well dimensions. Check it against a real plate and calibrate labware offsets in the OT-2 App before the first run.</p></article>
+        <article class="setup-card mapping-card"><div class="setup-title"><h3>Transfer map</h3><span id="amp-mapping-summary">One row per eight-channel transfer</span></div><div class="mapping-scroll"><table><thead><tr><th>PCR plate · column</th><th>Wells</th><th>Echo 384PP wells</th></tr></thead><tbody id="amp-mapping-body"></tbody></table></div></article>
+      </div>
+      <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="amp-machine-ready" class="ready-button" disabled><span>▷</span> Machine is ready</button></div>
+      <section id="amp-delivery-panel" class="delivery-panel" hidden>
+        <div class="delivery-actions"><button id="amp-download" class="primary-button">Download Python protocol</button><button id="amp-simulate" class="secondary-button">Open in WL Simulation</button></div>
+        <form id="amp-robot-upload-form" class="robot-upload-form">
+          <div><p class="eyebrow">Direct OT-2 submission</p><strong>Uploads for analysis—does not start a run</strong></div>
+          <label>Robot address<input id="amp-robot-address" class="text-field" type="text" required placeholder="192.168.1.42"></label>
+          <label>Upload PIN<input id="amp-upload-pin" class="text-field" type="password" required autocomplete="off"></label>
+          <button id="amp-upload-to-robot" type="submit" class="secondary-button">Upload to OT-2</button>
+        </form>
+      </section>
+    </section>
+  </main>
+
   <main id="simulator-screen" class="app-shell view-screen" hidden>
     <aside class="sidebar">
       <button class="back-button" data-route="landing">← All tools</button>
@@ -100,6 +146,6 @@
   <div id="global-error" class="global-error" hidden></div>
   <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
   <script src="simulator.js?v=4"></script>
-  <script src="app.js?v=12"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>

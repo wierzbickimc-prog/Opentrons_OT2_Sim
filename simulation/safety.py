@@ -19,6 +19,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 TOLERANCE_MM = 0.1
 SAMPLE_SPACING_MM = 2.0
 MAX_FINDINGS = 400
+# Aspirating slightly more than a well holds is a deliberate way to empty it
+# (PCR->AMP transfer draws 66 µL from 65 µL wells), so it is not a warning.
+SMALL_OVERDRAW_UL = 2.0
 
 LIMITATIONS = [
     "Uses default deck calibration and nominal labware definitions; a calibrated robot differs by a few millimeters.",
@@ -277,7 +280,12 @@ class SafetyChecker:
                                  f"Some channels aspirate from wells of {label(lw)} with no declared liquid and draw air.",
                                  index, mount=mount, labware=lw["id"], channel=channel, extra_well=name)
                     else:
-                        if known + 1e-6 < volume:
+                        if known + 1e-6 < volume <= known + SMALL_OVERDRAW_UL + 1e-6:
+                            self.add("info", "aspirate-overdraw",
+                                     f"Aspirating {volume:g} µL draws up to {SMALL_OVERDRAW_UL:g} µL more than wells of "
+                                     f"{label(lw)} hold, emptying them.",
+                                     index, mount=mount, labware=lw["id"], channel=channel, extra_well=name)
+                        elif known + 1e-6 < volume:
                             self.add("warning", "aspirate-insufficient",
                                      f"{name} of {label(lw)} holds {known:.1f} µL but {volume:g} µL is aspirated.",
                                      index, mount=mount, labware=lw["id"], well=name, channel=channel)
