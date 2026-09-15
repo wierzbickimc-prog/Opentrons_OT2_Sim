@@ -91,9 +91,12 @@ class SiteLoginTests(unittest.TestCase):
         return headers["Set-Cookie"].split(";")[0]
 
     def test_everything_requires_sign_in(self):
-        status, headers, _ = self.request("/")
-        self.assertEqual((status, headers.get("Location")), (302, "login"))
-        self.assertEqual(self.request("/app.js")[0], 302)
+        status, _, body = self.request("/")
+        self.assertEqual(status, 401)
+        self.assertIn(b"Enter the password", body)
+        self.assertNotIn(b"OT-2 Manufacturing Tools</title>\n  <script>", body)
+        self.assertEqual(self.request("/app.js")[0], 401)
+        self.assertEqual(self.request("/index.html")[0], 401)
         self.assertEqual(self.request("/api/health")[0], 401)
         self.assertEqual(self.request("/api/simulate", {"sample": True})[0], 401)
         status, _, body = self.request("/login")

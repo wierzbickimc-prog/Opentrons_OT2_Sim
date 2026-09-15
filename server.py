@@ -70,7 +70,7 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             return
         if path.endswith("/logout"):
             self.send_response(302)
-            self.send_header("Location", "login")
+            self.send_header("Location", "./")
             self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -144,12 +144,13 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             return True
         if "/api/" in path:
             self.send_json(401, {"error": "Sign in to continue.", "login": True})
+        elif path.endswith("/") or path.endswith(".html"):
+            # Serve the form in place rather than redirecting: behind a path-prefix
+            # proxy (e.g. /ot2 without a trailing slash) a relative redirect would
+            # leave the app. The page works out its base path in the browser.
+            self.send_login_page(status=401)
         else:
-            self.send_response(302)
-            self.send_header("Location", "login")
-            self.send_header("Content-Length", "0")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
+            self.send_error(401, "Sign in required")
         return False
 
     def session_token(self) -> str:
@@ -192,15 +193,15 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
         except RequestError as exc:
             self.send_json(exc.status, {"error": exc.message})
 
-    def send_login_page(self) -> None:
-        if not site_password() or valid_session(self.session_token()):
+    def send_login_page(self, status: int = 200) -> None:
+        if status == 200 and (not site_password() or valid_session(self.session_token())):
             self.send_response(302)
             self.send_header("Location", "./")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
         body = LOGIN_PAGE.encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -415,14 +416,16 @@ LOGIN_PAGE = """<!doctype html>
   <button id="submit" type="submit">Sign in</button>
 </form>
 <script>
+// The app may be mounted under a path prefix (/ot2); resolve its base from this URL.
+var base = window.location.pathname.replace(/\/(login|index\.html)$/, "/").replace(/([^/])$/, "$1/");
 document.getElementById("login").addEventListener("submit", async function (event) {
   event.preventDefault();
   var button = document.getElementById("submit"), error = document.getElementById("error");
   button.disabled = true; error.textContent = "";
   try {
-    var response = await fetch("api/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    var response = await fetch(base + "api/login", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: document.getElementById("password").value }) });
-    if (response.ok) { window.location.replace("./"); return; }
+    if (response.ok) { window.location.replace(base); return; }
     var result = await response.json().catch(function () { return {}; });
     error.textContent = result.error || "Sign-in failed.";
     document.getElementById("password").select();
