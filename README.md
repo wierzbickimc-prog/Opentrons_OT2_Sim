@@ -1,14 +1,14 @@
 # OT-2 Protocol Visualizer
 
-A dependency-free browser prototype for reviewing an OT-2 colony-rearray protocol. It renders synchronized top-down and three-quarter views, animates the eight-channel pipette, and tracks tips and liquid volumes locally in the browser.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists and reviewing OT-2 protocols. It generates downloadable Python protocols, renders synchronized top-down and three-quarter views, animates the eight-channel pipette, and tracks tips and liquid volumes.
 
 ## Run locally
 
 ```bash
-python3 -m http.server 8080
+python3 server.py
 ```
 
-Open <http://localhost:8080> and press **Play**. Uploading the supplied Python protocol recognizes its deck layout and warns about the original flattened-column targeting expression.
+Open <http://localhost:8766>. Choose **MFG_Plating** to create a work list or **WL Simulation** to review a protocol.
 
 After updating files while the server is already running, reload the page with the browser's cache bypass shortcut (`Cmd+Shift+R` on macOS or `Ctrl+Shift+R` on Linux/Windows).
 
@@ -17,20 +17,29 @@ After updating files while the server is already running, reload the page with t
 Copy this directory to the Ubuntu host and serve it with any static web server. For internal testing, Python is enough:
 
 ```bash
-python3 -m http.server 8080 --bind 0.0.0.0
+OT2_VISUALIZER_HOST=0.0.0.0 python3 server.py
 ```
 
-Then visit `http://HOST_IP:8080` from another machine on the internal network. Use an authenticated reverse proxy before exposing it outside a trusted network.
+Then visit `http://HOST_IP:8766` from another machine on the internal network. Use an authenticated reverse proxy before exposing it outside a trusted network.
 
 For a persistent per-user service, copy `deploy/ot2-visualizer.service` to `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, and enable it with `systemctl --user enable --now ot2-visualizer.service`.
 
 ## Prototype scope
 
-- The included rearray workflow contains 96 actions: 8 actions for each of 12 source columns.
-- Starting volume defaults to 130 µL in each of the 96 source wells.
-- Each source well ends at 90 µL; each destination well receives 10 µL.
-- Protocol files remain in the browser and are not uploaded to a server.
+- MFG_Plating supports 1–144 constructs, two source plates, two tip racks, and up to six destination plates.
+- Constructs map column-first: A1–H1, then A2–H2. A partial final column uses all eight tips and unused channels aspirate air.
+- Starting volume is 130 µL in each occupied source well. Each source well ends at 90 µL; each destination replicate receives 10 µL.
+- Generated files can be downloaded, opened directly in WL Simulation, or uploaded to an OT-2 for analysis.
+- Protocol files remain in the browser unless the operator explicitly chooses direct OT-2 submission.
 - The current parser recognizes and validates the supplied colony-rearray layout. A production version should use Opentrons' protocol-analysis output rather than executing arbitrary uploaded Python in the browser.
+
+## Direct OT-2 upload
+
+Set `OT2_UPLOAD_PIN` in the server environment to enable the PIN-protected upload proxy. The proxy accepts only private LAN or Tailscale robot addresses and always uses the OT-2 HTTP API on port 31950. It uploads the generated protocol for analysis but does not create or start a run.
+
+```bash
+OT2_UPLOAD_PIN='replace-with-a-long-random-value' python3 server.py
+```
 
 ## Motion and timing model
 

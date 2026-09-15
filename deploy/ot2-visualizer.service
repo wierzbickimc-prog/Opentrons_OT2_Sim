@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/apps/Opentrons_OT2_Sim
-ExecStart=/usr/bin/python3 -m http.server 8766 --bind 127.0.0.1 --directory %h/apps/Opentrons_OT2_Sim
+EnvironmentFile=-%h/.config/ot2-visualizer.env
+ExecStart=/usr/bin/python3 %h/apps/Opentrons_OT2_Sim/server.py
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

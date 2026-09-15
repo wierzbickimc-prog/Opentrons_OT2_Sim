@@ -41,6 +41,23 @@ const quarterCanvas = $("#quarter-canvas");
 const topCtx = topCanvas.getContext("2d");
 const quarterCtx = quarterCanvas.getContext("2d");
 
+function createWorkflow(constructCount, identifier, mode) {
+  const count = Math.max(1, Math.min(144, Number(constructCount) || 1));
+  const sourceColumns = Math.ceil(count / 8);
+  const sourcePlateCount = Math.ceil(count / 96);
+  const destinationPlateCount = Math.ceil(count / 24);
+  const legacy = mode === "legacy";
+  return {
+    identifier: identifier || "WL-Simulation",
+    constructCount: count,
+    sourceColumns,
+    sourceSlots: legacy ? [5] : [7, 8].slice(0, sourcePlateCount),
+    tipSlots: legacy ? [6] : [10, 11].slice(0, sourcePlateCount),
+    destinationSlots: Array.from({ length: destinationPlateCount }, (_item, index) => index + 1),
+    mode: legacy ? "legacy" : "mfg"
+  };
+}
+
 const state = {
   initialVolume: 130,
   stepIndex: 0,
@@ -49,7 +66,9 @@ const state = {
   speed: 1,
   lastTime: 0,
   steps: [],
-  uploadedSource: ""
+  uploadedSource: "",
+  generatedProtocol: "",
+  workflow: createWorkflow(96, "WL-Simulation", "legacy")
 };
 
 function destinationFor(sourceIndex) {
@@ -62,15 +81,20 @@ function makeDeckLocation(kind, slot, column = 0) { return { kind, slot, column 
 
 function buildSteps() {
   const steps = [];
-  for (let source = 0; source < 12; source += 1) {
+  const workflow = state.workflow;
+  for (let source = 0; source < workflow.sourceColumns; source += 1) {
     const dest = destinationFor(source);
-    const sourceLoc = makeDeckLocation("source", 5, source);
-    const tipLoc = makeDeckLocation("tips", 6, source);
-    const destLoc = (index) => makeDeckLocation("destination", dest.plate + 1, dest.columns[index]);
-    const meta = { source, plate: dest.plate, columns: dest.columns };
+    const sourcePlate = Math.floor(source / 12);
+    const sourceColumn = source % 12;
+    const tipRack = Math.floor(source / 12);
+    const activeRows = Math.min(8, workflow.constructCount - source * 8);
+    const sourceLoc = makeDeckLocation("source", workflow.sourceSlots[sourcePlate], sourceColumn);
+    const tipLoc = makeDeckLocation("tips", workflow.tipSlots[tipRack], sourceColumn);
+    const destLoc = (index) => makeDeckLocation("destination", workflow.destinationSlots[dest.plate], dest.columns[index]);
+    const meta = { source, sourcePlate, sourceColumn, tipRack, activeRows, plate: dest.plate, columns: dest.columns };
     steps.push(
-      { ...meta, type: "pickup", label: `Pick up 8 tips · rack column ${source + 1}`, volume: 0, location: tipLoc },
-      { ...meta, type: "aspirate", label: `Aspirate 20 µL · source column ${source + 1}`, volume: 20, location: sourceLoc },
+      { ...meta, type: "pickup", label: `Pick up 8 tips · rack ${tipRack + 1}, column ${sourceColumn + 1}`, volume: 0, location: tipLoc },
+      { ...meta, type: "aspirate", label: `Aspirate 20 µL · source ${sourcePlate + 1}, column ${sourceColumn + 1}`, volume: 20, location: sourceLoc },
       { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[0] + 1}`, volume: 10, destColumn: dest.columns[0], location: destLoc(0) },
       { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[1] + 1}`, volume: 10, destColumn: dest.columns[1], location: destLoc(1) },
       { ...meta, type: "aspirate", label: `Aspirate 20 µL · source column ${source + 1}`, volume: 20, location: sourceLoc },
@@ -83,11 +107,11 @@ function buildSteps() {
 }
 
 function derivedState() {
-  const sources = Array.from({ length: 12 }, () => state.initialVolume);
-  const destinations = Array.from({ length: 4 }, () => Array(12).fill(0));
-  const usedTipColumns = new Set();
+  const sources = state.workflow.sourceSlots.map((_slot, plate) => Array.from({ length: 12 }, (_item, col) => Array.from({ length: 8 }, (_rowItem, row) => plate * 96 + col * 8 + row < state.workflow.constructCount ? state.initialVolume : 0)));
+  const destinations = state.workflow.destinationSlots.map(() => Array.from({ length: 12 }, () => Array(8).fill(0)));
+  const usedTipColumns = state.workflow.tipSlots.map(() => new Set());
   let tipsAttached = false;
-  let tipVolume = 0;
+  const tipVolumes = Array(8).fill(0);
 
   state.steps.forEach((step, index) => {
     let fraction = index < state.stepIndex ? 1 : 0;
@@ -100,19 +124,23 @@ function derivedState() {
     if (fraction <= 0) return;
     if (step.type === "pickup") {
       tipsAttached = fraction > 0.45;
-      if (fraction > 0.45) usedTipColumns.add(step.source);
+      if (fraction > 0.45) usedTipColumns[step.tipRack].add(step.sourceColumn);
     } else if (step.type === "aspirate") {
-      sources[step.source] -= step.volume * fraction;
-      tipVolume += step.volume * fraction;
+      for (let row = 0; row < step.activeRows; row += 1) {
+        sources[step.sourcePlate][step.sourceColumn][row] -= step.volume * fraction;
+        tipVolumes[row] += step.volume * fraction;
+      }
     } else if (step.type === "dispense") {
-      destinations[step.plate][step.destColumn] += step.volume * fraction;
-      tipVolume -= step.volume * fraction;
+      for (let row = 0; row < step.activeRows; row += 1) {
+        destinations[step.plate][step.destColumn][row] += step.volume * fraction;
+        tipVolumes[row] -= step.volume * fraction;
+      }
     } else if (step.type === "drop" && fraction > 0.6) {
       tipsAttached = false;
     }
   });
 
-  return { sources, destinations, usedTipColumns, tipsAttached, tipVolume: Math.max(0, tipVolume) };
+  return { sources, destinations, usedTipColumns, tipsAttached, tipVolumes: tipVolumes.map((volume) => Math.max(0, volume)) };
 }
 
 function previousLocation() {
@@ -262,11 +290,11 @@ function drawPlateTop(ctx, x, y, w, h, type, values, highlightedColumns = []) {
         const used = values.has(col);
         ctx.fillStyle = used ? "#182126" : "#d7e64a";
       } else if (type === "source") {
-        const volume = values[col];
+        const volume = values[col][row];
         const alpha = .22 + .72 * Math.max(0, volume) / state.initialVolume;
-        ctx.fillStyle = `rgba(255, 194, 71, ${alpha})`;
+        ctx.fillStyle = volume > 0 ? `rgba(255, 194, 71, ${alpha})` : "#52636b";
       } else {
-        const volume = values[col];
+        const volume = values[col][row];
         ctx.fillStyle = volume > 0 ? `rgba(32, 212, 230, ${.25 + volume / 16})` : "#71848d";
       }
       ctx.fill();
@@ -290,19 +318,23 @@ function drawTop() {
   ctx.strokeStyle = COLORS.deckEdge; ctx.lineWidth = 2; ctx.stroke();
   ctx.fillStyle = "#83939a"; ctx.font = "600 9px system-ui"; ctx.textAlign = "left";
   const liquids = derivedState(); const current = state.steps[state.stepIndex];
+  const workflow = state.workflow;
 
   for (let slot = 1; slot <= 12; slot += 1) {
     const p = slotPosition(slot, box); const sw = box.slotW * .92, sh = box.slotH * .84;
     ctx.fillStyle = "#72828a"; ctx.fillText(String(slot), p.x + 2, p.y + 10);
     roundedRect(ctx, p.x + 10, p.y + 3, sw - 12, sh - 5, 6); ctx.fillStyle = COLORS.slot; ctx.fill(); ctx.strokeStyle = COLORS.slotEdge; ctx.stroke();
     const lx = p.x + 14, ly = p.y + 7, lw = sw - 20, lh = sh - 13;
-    if (slot >= 1 && slot <= 4) {
-      const highlighted = current.plate === slot - 1 ? current.columns : [];
-      drawPlateTop(ctx, lx, ly, lw, lh, "destination", liquids.destinations[slot - 1], highlighted);
-    } else if (slot === 5) {
-      drawPlateTop(ctx, lx, ly, lw, lh, "source", liquids.sources, [current.source]);
-    } else if (slot === 6) {
-      drawPlateTop(ctx, lx, ly, lw, lh, "tips", liquids.usedTipColumns, current.type === "pickup" ? [current.source] : []);
+    const destinationIndex = workflow.destinationSlots.indexOf(slot);
+    const sourceIndex = workflow.sourceSlots.indexOf(slot);
+    const tipIndex = workflow.tipSlots.indexOf(slot);
+    if (destinationIndex >= 0) {
+      const highlighted = current.plate === destinationIndex ? current.columns : [];
+      drawPlateTop(ctx, lx, ly, lw, lh, "destination", liquids.destinations[destinationIndex], highlighted);
+    } else if (sourceIndex >= 0) {
+      drawPlateTop(ctx, lx, ly, lw, lh, "source", liquids.sources[sourceIndex], current.sourcePlate === sourceIndex ? [current.sourceColumn] : []);
+    } else if (tipIndex >= 0) {
+      drawPlateTop(ctx, lx, ly, lw, lh, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : []);
     } else if (slot === 12) {
       roundedRect(ctx, lx, ly, lw, lh, 7); ctx.fillStyle = "#080c0f"; ctx.fill(); ctx.strokeStyle = "#47555b"; ctx.stroke();
       ctx.fillStyle = "#87979f"; ctx.textAlign = "center"; ctx.font = "700 8px system-ui"; ctx.fillText("FIXED TRASH", lx + lw / 2, ly + lh / 2 + 3); ctx.textAlign = "left";
@@ -356,8 +388,8 @@ function drawPlateIso(ctx, slot, type, values, highlighted, view) {
       const rx = Math.max(1.3, view.width / 720 * 2.2), ry = rx * .55;
       ctx.beginPath(); ctx.ellipse(point.x, point.y, rx, ry, 0, 0, Math.PI * 2);
       if (type === "tips") ctx.fillStyle = values.has(c) ? "#263139" : "#ddea55";
-      else if (type === "source") ctx.fillStyle = `rgba(255,194,71,${.3 + values[c] / 200})`;
-      else ctx.fillStyle = values[c] > 0 ? "#20d4e6" : "#6d7f87";
+      else if (type === "source") ctx.fillStyle = values[c][r] > 0 ? `rgba(255,194,71,${.3 + values[c][r] / 200})` : "#52636b";
+      else ctx.fillStyle = values[c][r] > 0 ? "#20d4e6" : "#6d7f87";
       ctx.fill();
       if (highlighted.includes(c)) { ctx.strokeStyle = type === "source" ? COLORS.source : COLORS.destination; ctx.lineWidth = 1.2; ctx.stroke(); }
     }
@@ -368,6 +400,7 @@ function drawQuarter() {
   const view = fitCanvas(quarterCanvas, quarterCtx); const ctx = quarterCtx;
   ctx.clearRect(0, 0, view.width, view.height);
   const liquids = derivedState(); const current = state.steps[state.stepIndex];
+  const workflow = state.workflow;
   const deckCorners = [[0,0],[397.5,0],[397.5,362],[0,362]].map(([x,y]) => isoProject(x,y,0,view));
   polygon(ctx, deckCorners, "#222d32", "#74848b");
   prism(ctx, -17, -12, -18, 432, 392, 18, view, { top: "#334047", side: "#121a1e", front: "#536168", edge: "#11191d" });
@@ -375,9 +408,12 @@ function drawQuarter() {
   for (let row = 3; row >= 0; row -= 1) {
     for (let col = 2; col >= 0; col -= 1) {
       const slot = row * 3 + col + 1;
-      if (slot >= 1 && slot <= 4) drawPlateIso(ctx, slot, "destination", liquids.destinations[slot - 1], current.plate === slot - 1 ? current.columns : [], view);
-      if (slot === 5) drawPlateIso(ctx, slot, "source", liquids.sources, [current.source], view);
-      if (slot === 6) drawPlateIso(ctx, slot, "tips", liquids.usedTipColumns, current.type === "pickup" ? [current.source] : [], view);
+      const destinationIndex = workflow.destinationSlots.indexOf(slot);
+      const sourceIndex = workflow.sourceSlots.indexOf(slot);
+      const tipIndex = workflow.tipSlots.indexOf(slot);
+      if (destinationIndex >= 0) drawPlateIso(ctx, slot, "destination", liquids.destinations[destinationIndex], current.plate === destinationIndex ? current.columns : [], view);
+      if (sourceIndex >= 0) drawPlateIso(ctx, slot, "source", liquids.sources[sourceIndex], current.sourcePlate === sourceIndex ? [current.sourceColumn] : [], view);
+      if (tipIndex >= 0) drawPlateIso(ctx, slot, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : [], view);
       if (slot === 12) prism(ctx, col * 132.5 + 8, row * 90.5 + 5, 4, 118, 78, 48, view, { top: "#070b0d", side: "#11181c", front: "#1c252a", edge: "#56656b" });
     }
   }
@@ -398,7 +434,7 @@ function drawQuarter() {
     if (liquids.tipsAttached) {
       const end = isoProject(pose.x, channelY, pose.z - MOTION.exposedTipLength, view);
       ctx.strokeStyle = COLORS.tip; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tipPoint.x, tipPoint.y); ctx.lineTo(end.x, end.y); ctx.stroke();
-      if (liquids.tipVolume > 0) { ctx.strokeStyle = COLORS.liquid; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(end.x, end.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke(); }
+      if (liquids.tipVolumes[channel] > 0) { ctx.strokeStyle = COLORS.liquid; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(end.x, end.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke(); }
     }
   }
 
@@ -417,8 +453,11 @@ function drawQuarter() {
   $("#telemetry-x").textContent = mmX.toFixed(1);
   $("#telemetry-y").textContent = mmY.toFixed(1);
   $("#telemetry-z").textContent = pose.z.toFixed(1);
-  $("#tip-volume").textContent = `${liquids.tipVolume.toFixed(liquids.tipVolume % 1 ? 1 : 0)} µL × 8`;
-  $("#tip-fill").style.width = `${Math.min(100, liquids.tipVolume / 20 * 100)}%`;
+  const activeLiquidTips = liquids.tipVolumes.filter((volume) => volume > .01);
+  const maximumTipVolume = activeLiquidTips.length ? Math.max(...activeLiquidTips) : 0;
+  const airTips = current.activeRows < 8 ? 8 - current.activeRows : 0;
+  $("#tip-volume").textContent = activeLiquidTips.length ? `${maximumTipVolume.toFixed(maximumTipVolume % 1 ? 1 : 0)} µL × ${activeLiquidTips.length}${airTips ? ` · air × ${airTips}` : ""}` : `0 µL${airTips ? ` · air × ${airTips}` : " × 8"}`;
+  $("#tip-fill").style.width = `${Math.min(100, maximumTipVolume / 20 * 100)}%`;
 }
 
 function renderStepList() {
@@ -426,7 +465,8 @@ function renderStepList() {
   const start = Math.max(0, Math.min(state.steps.length - 8, state.stepIndex - 3));
   list.innerHTML = state.steps.slice(start, start + 8).map((step, offset) => {
     const index = start + offset;
-    return `<div class="step-row ${index === state.stepIndex ? "active" : index < state.stepIndex ? "done" : ""}"><span class="num">${String(index + 1).padStart(2,"0")}</span><span class="label">${step.label}</span><span class="amount">${step.volume ? `${step.volume} µL ×8` : ""}</span></div>`;
+    const amount = step.volume ? `${step.volume} µL ×${step.activeRows}${step.activeRows < 8 ? ` · air ×${8 - step.activeRows}` : ""}` : "";
+    return `<div class="step-row ${index === state.stepIndex ? "active" : index < state.stepIndex ? "done" : ""}"><span class="num">${String(index + 1).padStart(2,"0")}</span><span class="label">${step.label}</span><span class="amount">${amount}</span></div>`;
   }).join("");
 }
 
@@ -435,7 +475,7 @@ function updateUI() {
   $("#step-fraction").textContent = `${state.stepIndex + 1} / ${state.steps.length}`;
   $("#timeline").value = state.stepIndex;
   $("#current-action").textContent = step.label;
-  $("#cycle-label").textContent = `Source ${step.source + 1}/12 · Plate ${step.plate + 1} · Dest. ${step.columns[0] + 1}–${step.columns[3] + 1}`;
+  $("#cycle-label").textContent = `Source col. ${step.source + 1}/${state.workflow.sourceColumns} · Plate ${step.plate + 1} · Dest. ${step.columns[0] + 1}–${step.columns[3] + 1}`;
   updateTimeDisplay();
   $("#play-button").textContent = state.playing ? "Ⅱ" : "▶";
   renderStepList();
@@ -480,7 +520,7 @@ function animate(time) {
     updateTimeDisplay();
   }
   try {
-    draw();
+    if (!$("#simulator-screen").hidden) draw();
     requestAnimationFrame(animate);
   } catch (error) {
     showRenderError(error);
@@ -501,6 +541,8 @@ function parseProtocol(text, filename) {
   const aspirateFlowMatch = text.match(/\.flow_rate\.aspirate\s*=\s*([0-9.]+)/);
   const dispenseFlowMatch = text.match(/\.flow_rate\.dispense\s*=\s*([0-9.]+)/);
   const initialVolumeMatch = text.match(/load_liquid\s*\([\s\S]*?volume\s*=\s*([0-9.]+)/);
+  const countMatch = text.match(/CONSTRUCT_COUNT\s*=\s*(\d+)/);
+  const identifierMatch = text.match(/WORKLIST_ID\s*=\s*["']([^"']+)/);
   MOTION.gantrySpeed = gantryMatch ? Number(gantryMatch[1]) : 400;
   MOTION.aspirateFlowRate = aspirateFlowMatch ? Number(aspirateFlowMatch[1]) : 7.6;
   MOTION.dispenseFlowRate = dispenseFlowMatch ? Number(dispenseFlowMatch[1]) : 7.6;
@@ -513,11 +555,15 @@ function parseProtocol(text, filename) {
   $("#file-name").textContent = filename;
   $("#file-name").nextElementSibling.textContent = `Python API ${api} · ${robot}`;
   if (name) $("#protocol-title").textContent = name.replace(" - PCR Plate to Omnitrays", "");
+  if (countMatch) applyWorkflow(createWorkflow(Number(countMatch[1]), identifierMatch ? identifierMatch[1] : filename, "mfg"));
+  else applyWorkflow(createWorkflow(96, filename, "legacy"));
   const notice = $("#protocol-notice");
   const hasExpectedLayout = /source_plate[\s\S]*?\b5\s*\)/.test(text) && /tiprack[\s\S]*?\b6\s*\)/.test(text) && /\[1\s*,\s*2\s*,\s*3\s*,\s*4\]/.test(text);
   const hasFlattenBug = /for\s+col\s+in\s+dest_columns\s+for\s+well\s+in\s+col/.test(text);
   notice.hidden = false;
-  if (!hasExpectedLayout) {
+  if (countMatch) {
+    notice.textContent = `MFG work list recognized: ${state.workflow.constructCount} constructs across ${state.workflow.sourceColumns} source columns.`;
+  } else if (!hasExpectedLayout) {
     notice.textContent = "Uploaded successfully. This prototype currently renders the colony-rearray deck template; broader Python protocol parsing is the next integration step.";
   } else if (hasFlattenBug) {
     notice.textContent = "Column-selection issue detected. Previewing intended A-row primary targets across four destination columns.";
@@ -525,7 +571,158 @@ function parseProtocol(text, filename) {
     notice.textContent = "Protocol layout recognized. Preview generated locally.";
   }
   state.uploadedSource = text;
+}
+
+function applyWorkflow(workflow) {
+  state.workflow = workflow;
+  state.playing = false;
+  state.stepIndex = 0;
+  state.progress = 0;
+  buildSteps();
+  $("#timeline").max = Math.max(0, state.steps.length - 1);
+  $("#stat-sources").textContent = workflow.sourceColumns;
+  $("#stat-destinations").textContent = workflow.sourceColumns * 4;
+  $("#stat-actions").textContent = state.steps.length;
+  $("#protocol-description").textContent = `${workflow.constructCount} constructs → ${workflow.destinationSlots.length} destination plate${workflow.destinationSlots.length === 1 ? "" : "s"}`;
   setStep(0, 0);
+}
+
+function routeTo(route) {
+  $("#landing-screen").hidden = route !== "landing";
+  $("#mfg-screen").hidden = route !== "mfg";
+  $("#simulator-screen").hidden = route !== "simulator";
+  const labels = {
+    landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
+    mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
+    simulator: ["WL Simulation", "Synchronized OT-2 motion and liquid preview"]
+  };
+  $("#app-title").textContent = labels[route][0];
+  $("#app-subtitle").textContent = labels[route][1];
+  if (route === "simulator") window.setTimeout(draw, 0);
+}
+
+function deckItemFor(workflow, slot) {
+  const destination = workflow.destinationSlots.indexOf(slot);
+  const source = workflow.sourceSlots.indexOf(slot);
+  const tips = workflow.tipSlots.indexOf(slot);
+  if (destination >= 0) return { type: "destination", label: `Destination ${destination + 1}`, detail: "Agar plate" };
+  if (source >= 0) return { type: "source", label: `Source ${source + 1}`, detail: "PCR plate" };
+  if (tips >= 0) return { type: "tips", label: `Tip rack ${tips + 1}`, detail: "20 µL tips" };
+  if (slot === 12) return { type: "trash", label: "Fixed trash", detail: "Built in" };
+  return { type: "empty", label: "Empty", detail: "" };
+}
+
+function renderWorklist(workflow) {
+  $("#output-title").textContent = workflow.identifier;
+  $("#required-sources").textContent = workflow.sourceSlots.length;
+  $("#required-tips").textContent = workflow.tipSlots.length;
+  $("#required-destinations").textContent = workflow.destinationSlots.length;
+  $("#required-actions").textContent = workflow.sourceColumns * 8;
+  $("#mapping-summary").textContent = `${workflow.constructCount} constructs · ${workflow.sourceColumns} source columns`;
+  const deckOrder = [10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3];
+  $("#work-deck").innerHTML = deckOrder.map((slot) => {
+    const item = deckItemFor(workflow, slot);
+    return `<div class="deck-slot ${item.type}"><b>${slot}</b><div><span>${item.label}</span><small>${item.detail}</small></div></div>`;
+  }).join("");
+  const rows = [];
+  for (let globalColumn = 0; globalColumn < workflow.sourceColumns; globalColumn += 1) {
+    const first = globalColumn * 8 + 1;
+    const last = Math.min(workflow.constructCount, first + 7);
+    const sourcePlate = Math.floor(globalColumn / 12) + 1;
+    const sourceColumn = globalColumn % 12 + 1;
+    const destination = destinationFor(globalColumn);
+    rows.push(`<tr><td>${first}–${last}${last - first < 7 ? " (partial)" : ""}</td><td>Plate ${sourcePlate}, column ${sourceColumn}</td><td>Plate ${destination.plate + 1}, columns ${destination.columns[0] + 1}–${destination.columns[3] + 1}</td></tr>`);
+  }
+  $("#mapping-body").innerHTML = rows.join("");
+}
+
+function pythonString(value) { return JSON.stringify(String(value)); }
+
+function generateProtocol(workflow) {
+  const sourceSlots = JSON.stringify(workflow.sourceSlots);
+  const tipSlots = JSON.stringify(workflow.tipSlots);
+  const destinationSlots = JSON.stringify(workflow.destinationSlots);
+  return `from opentrons import protocol_api
+
+metadata = {
+    "protocolName": "MFG_Plating - " + ${pythonString(workflow.identifier)},
+    "author": "OT-2 Manufacturing Tools",
+    "description": "Four 10 uL destination replicates for ${workflow.constructCount} constructs",
+    "worklistId": ${pythonString(workflow.identifier)},
+}
+
+requirements = {"robotType": "OT-2", "apiLevel": "2.28"}
+
+WORKLIST_ID = ${pythonString(workflow.identifier)}
+CONSTRUCT_COUNT = ${workflow.constructCount}
+STARTING_VOLUME = 130
+SOURCE_SLOTS = ${sourceSlots}
+TIP_SLOTS = ${tipSlots}
+DESTINATION_SLOTS = ${destinationSlots}
+
+
+def run(protocol: protocol_api.ProtocolContext):
+    source_plates = [
+        protocol.load_labware("opentrons_96_wellplate_200ul_pcr_full_skirt", slot)
+        for slot in SOURCE_SLOTS
+    ]
+    destination_plates = [
+        protocol.load_labware("corning_96_wellplate_360ul_flat", slot)
+        for slot in DESTINATION_SLOTS
+    ]
+    tip_racks = [
+        protocol.load_labware("opentrons_96_tiprack_20ul", slot)
+        for slot in TIP_SLOTS
+    ]
+    p20_multi = protocol.load_instrument("p20_multi_gen2", "left", tip_racks=tip_racks)
+
+    culture = protocol.define_liquid(
+        name="E. coli culture", description=WORKLIST_ID, display_color="#FFC247"
+    )
+    # wells() follows column-major order: A1-H1, then A2-H2.
+    for construct_index in range(CONSTRUCT_COUNT):
+        plate_index = construct_index // 96
+        local_well_index = construct_index % 96
+        source_plates[plate_index].wells()[local_well_index].load_liquid(
+            liquid=culture, volume=STARTING_VOLUME
+        )
+
+    source_column_count = (CONSTRUCT_COUNT + 7) // 8
+    for global_source_column in range(source_column_count):
+        source_plate_index = global_source_column // 12
+        local_source_column = global_source_column % 12
+        source_well = source_plates[source_plate_index].columns()[local_source_column][0]
+
+        destination_plate_index = global_source_column // 3
+        first_destination_column = (global_source_column % 3) * 4
+        destination_columns = destination_plates[destination_plate_index].columns()[
+            first_destination_column:first_destination_column + 4
+        ]
+        destination_targets = [column[0] for column in destination_columns]
+
+        # A partial final column intentionally uses all eight tips. Channels
+        # aligned with unoccupied source wells will aspirate air.
+        p20_multi.pick_up_tip()
+        p20_multi.aspirate(20, source_well)
+        p20_multi.dispense(10, destination_targets[0])
+        p20_multi.dispense(10, destination_targets[1])
+        p20_multi.aspirate(20, source_well)
+        p20_multi.dispense(10, destination_targets[2])
+        p20_multi.dispense(10, destination_targets[3])
+        p20_multi.drop_tip()
+`;
+}
+
+function safeFilename(identifier) {
+  const cleaned = identifier.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return `${cleaned || "MFG_Plating"}.py`;
+}
+
+function showMfgStatus(message, isError) {
+  const status = $("#mfg-status");
+  status.hidden = false;
+  status.classList.toggle("error", Boolean(isError));
+  status.textContent = message;
 }
 
 $("#play-button").addEventListener("click", () => { if (state.stepIndex === state.steps.length - 1 && state.progress === 1) setStep(0,0); state.playing = !state.playing; updateUI(); });
@@ -553,7 +750,102 @@ $("#protocol-file").addEventListener("change", async (event) => {
   catch (error) { const notice = $("#protocol-notice"); notice.hidden = false; notice.textContent = error.message; }
 });
 
-buildSteps(); updateUI();
+let draftWorkflow = null;
+
+function invalidateWorklist() {
+  if (!draftWorkflow) return;
+  draftWorkflow = null;
+  state.generatedProtocol = "";
+  $("#machine-ready").disabled = true;
+  $("#delivery-panel").hidden = true;
+  $("#worklist-state").textContent = "Draft";
+  $("#worklist-state").classList.remove("ready");
+  showMfgStatus("Work-list details changed. Create the work list again before confirming the deck.", false);
+}
+
+$("#open-mfg").addEventListener("click", () => routeTo("mfg"));
+$("#open-simulator").addEventListener("click", () => routeTo("simulator"));
+$("#home-button").addEventListener("click", () => routeTo("landing"));
+document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => routeTo(button.dataset.route)));
+$("#worklist-id").addEventListener("input", invalidateWorklist);
+$("#construct-count").addEventListener("input", invalidateWorklist);
+
+$("#worklist-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const identifier = $("#worklist-id").value.trim();
+  const count = Number($("#construct-count").value);
+  if (!identifier) { showMfgStatus("Enter a unique identifier.", true); return; }
+  if (!Number.isInteger(count) || count < 1 || count > 144) { showMfgStatus("Construct count must be a whole number from 1 through 144.", true); return; }
+  draftWorkflow = createWorkflow(count, identifier, "mfg");
+  renderWorklist(draftWorkflow);
+  $("#machine-ready").disabled = false;
+  $("#delivery-panel").hidden = true;
+  $("#worklist-state").textContent = "Setup calculated";
+  $("#worklist-state").classList.remove("ready");
+  showMfgStatus(`Mapped ${count} constructs across ${draftWorkflow.sourceColumns} source columns. Verify the deck before continuing.`, false);
+});
+
+$("#machine-ready").addEventListener("click", () => {
+  if (!draftWorkflow) return;
+  state.generatedProtocol = generateProtocol(draftWorkflow);
+  $("#delivery-panel").hidden = false;
+  $("#worklist-state").textContent = "Machine ready";
+  $("#worklist-state").classList.add("ready");
+  $("#machine-ready").disabled = true;
+  showMfgStatus("Machine readiness confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
+});
+
+$("#download-protocol").addEventListener("click", () => {
+  if (!draftWorkflow || !state.generatedProtocol) return;
+  const blob = new Blob([state.generatedProtocol], { type: "text/x-python;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = safeFilename(draftWorkflow.identifier);
+  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  showMfgStatus(`Downloaded ${link.download}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
+});
+
+$("#simulate-worklist").addEventListener("click", () => {
+  if (!draftWorkflow || !state.generatedProtocol) return;
+  applyWorkflow(draftWorkflow);
+  state.uploadedSource = state.generatedProtocol;
+  $("#file-name").textContent = safeFilename(draftWorkflow.identifier);
+  $("#file-name").nextElementSibling.textContent = "Python API 2.28 · OT-2";
+  $("#protocol-title").textContent = `MFG_Plating · ${draftWorkflow.identifier}`;
+  $("#protocol-notice").hidden = false;
+  $("#protocol-notice").textContent = "Generated work list loaded. Direct upload remains disabled from the simulation screen.";
+  routeTo("simulator");
+});
+
+$("#robot-upload-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!draftWorkflow || !state.generatedProtocol) return;
+  const button = $("#upload-to-robot");
+  button.disabled = true; button.textContent = "Uploading…";
+  try {
+    const response = await fetch("./api/ot2/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        robotAddress: $("#robot-address").value.trim(),
+        pin: $("#upload-pin").value,
+        filename: safeFilename(draftWorkflow.identifier),
+        protocol: state.generatedProtocol,
+        worklistId: draftWorkflow.identifier
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Upload failed (${response.status})`);
+    showMfgStatus(`Uploaded to OT-2 for analysis. Protocol ID: ${result.protocolId || "returned by robot"}. Open the OT-2 App to review setup and start the run.`, false);
+    $("#upload-pin").value = "";
+  } catch (error) {
+    showMfgStatus(error.message, true);
+  } finally {
+    button.disabled = false; button.textContent = "Upload to OT-2";
+  }
+});
+
+buildSteps(); $("#timeline").max = state.steps.length - 1; updateUI();
 if ("ResizeObserver" in window) new ResizeObserver(draw).observe($(".view-grid"));
 else window.addEventListener("resize", draw);
 requestAnimationFrame(animate);

@@ -4,122 +4,84 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#091219">
-  <title>OT-2 Protocol Visualizer</title>
-  <link rel="stylesheet" href="styles.css?v=5">
+  <title>OT-2 Manufacturing Tools</title>
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <header class="app-header">
-    <div class="brand-mark" aria-hidden="true"><span></span></div>
-    <div>
-      <h1>OT-2 Protocol Visualizer</h1>
-      <p>Local protocol preview · no robot connection</p>
-    </div>
-    <div class="header-status"><span class="status-dot"></span> Simulation ready</div>
+    <button id="home-button" class="brand-mark" aria-label="Return to landing screen"><span></span></button>
+    <div><h1 id="app-title">OT-2 Manufacturing Tools</h1><p id="app-subtitle">Protocol planning, generation, and simulation</p></div>
+    <div class="header-status"><span class="status-dot"></span><span id="header-status-text">System ready</span></div>
   </header>
 
-  <main class="app-shell">
-    <aside class="sidebar">
-      <label class="upload-button" for="protocol-file">
-        <span aria-hidden="true">⇧</span> Upload protocol
-      </label>
-      <input id="protocol-file" type="file" accept=".py,text/x-python">
-      <div class="file-card">
-        <div class="file-icon">PY</div>
-        <div><strong id="file-name">colony_rearray.py</strong><small>Python API 2.28 · OT-2</small></div>
-      </div>
-
-      <section class="protocol-info">
-        <p class="eyebrow">Loaded protocol</p>
-        <h2 id="protocol-title">E. coli Colony Rearray</h2>
-        <p id="protocol-description">96-well PCR plate → four agar destination plates</p>
-        <div class="stats-grid">
-          <div><strong>12</strong><span>source columns</span></div>
-          <div><strong>48</strong><span>destination columns</span></div>
-          <div><strong>96</strong><span>actions</span></div>
-          <div><strong>8</strong><span>channels</span></div>
-        </div>
-      </section>
-
-      <section class="volume-settings">
-        <div><p class="eyebrow">Starting volume</p><small>Applied to every source well</small></div>
-        <label><input id="start-volume" type="number" min="40" max="200" step="1" value="130"> µL</label>
-      </section>
-
-      <details class="estimator-info">
-        <summary>Motion model assumptions</summary>
-        <dl>
-          <div><dt>XY gantry</dt><dd id="gantry-assumption">400 mm/s</dd></div>
-          <div><dt>Z axis</dt><dd>125 mm/s</dd></div>
-          <div><dt>P20 flow</dt><dd id="flow-assumption">7.6 µL/s</dd></div>
-          <div><dt>Safe nozzle Z</dt><dd>111 mm</dd></div>
-          <div><dt>Uncertainty</dt><dd>±20%</dd></div>
-        </dl>
-      </details>
-
-      <section class="steps-section">
-        <div class="section-title"><span>Protocol actions</span><strong id="step-fraction">1 / 96</strong></div>
-        <div id="step-list" class="step-list" aria-live="polite"></div>
-      </section>
-
-      <div id="protocol-notice" class="notice" hidden></div>
-    </aside>
-
-    <section class="workspace">
-      <div class="view-grid">
-        <article class="view-panel top-panel">
-          <div class="panel-header">
-            <div><span class="view-kicker">Synchronized view</span><h2>Deck · top-down</h2></div>
-            <div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div>
-          </div>
-          <div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div>
-        </article>
-
-        <article class="view-panel quarter-panel">
-          <div class="panel-header">
-            <div><span class="view-kicker">Realistic motion preview</span><h2>OT-2 · three-quarter</h2></div>
-            <div class="camera-badge">3D&nbsp; ◇</div>
-          </div>
-          <div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div>
-          <div class="telemetry">
-            <div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div>
-            <div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div>
-            <div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div>
-            <div class="tip-meter"><span>TIP VOLUME</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div>
-          </div>
-        </article>
-      </div>
-
-      <section class="transport">
-        <button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button>
-        <button id="previous-button" class="icon-button" title="Previous action" aria-label="Previous action">│◀</button>
-        <button id="play-button" class="play-button" aria-label="Play simulation">▶</button>
-        <button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button>
-        <div class="timeline-group">
-          <div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span><i id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</i><b id="time-label">00:00 / ~00:00</b></span></div>
-          <input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action">
-        </div>
-        <label class="speed-control">Speed
-          <select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
-        </label>
-      </section>
-
-      <footer class="run-status">
-        <span><i class="green"></i><strong>Tip tracking</strong> Active</span>
-        <span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span>
-        <span><i class="green"></i><strong>Motion model</strong> Geometry-based estimate</span>
-        <span class="local-badge">Runs locally in your browser</span>
-      </footer>
+  <main id="landing-screen" class="landing-screen view-screen">
+    <section class="landing-copy"><p class="eyebrow">Manufacturing operations</p><h2>What would you like to do?</h2><p>Create a production-ready plating work list or inspect an existing OT-2 protocol.</p></section>
+    <section class="landing-options">
+      <button id="open-mfg" class="landing-card"><span class="card-icon amber-icon">MFG</span><span><strong>MFG_Plating</strong><small>Map constructs, prepare the deck, and generate an OT-2 protocol.</small></span><b>→</b></button>
+      <button id="open-simulator" class="landing-card"><span class="card-icon cyan-icon">WL</span><span><strong>WL Simulation</strong><small>Upload a Python work list and visualize the complete run.</small></span><b>→</b></button>
     </section>
   </main>
-  <script>
-    window.addEventListener("error", function (event) {
-      var notice = document.getElementById("protocol-notice");
-      if (!notice) return;
-      notice.hidden = false;
-      notice.className = "notice error";
-      notice.textContent = "Application error: " + (event.message || "the renderer could not start");
-    });
-  </script>
-  <script src="app.js?v=5"></script>
+
+  <main id="mfg-screen" class="mfg-screen view-screen" hidden>
+    <section class="mfg-form-panel">
+      <button class="back-button" data-route="landing">← All tools</button>
+      <p class="eyebrow">New work list</p><h2>MFG_Plating</h2>
+      <p class="form-intro">Generate four 10 µL destination replicates from each construct using a P20 eight-channel GEN2.</p>
+      <form id="worklist-form">
+        <label class="field-label" for="worklist-id">Unique identifier</label>
+        <input id="worklist-id" class="text-field" type="text" maxlength="80" required placeholder="e.g. MFG-2026-00421">
+        <small class="field-help">Included in protocol metadata and the downloaded filename.</small>
+        <label class="field-label" for="construct-count">Number of constructs</label>
+        <div class="count-control"><input id="construct-count" class="text-field" type="number" min="1" max="144" value="96" required><span>1–144</span></div>
+        <small class="field-help">Mapped A1→H1, then A2→H2. Partial columns use all eight tips; unused channels aspirate air.</small>
+        <button type="submit" class="primary-button">Create work list</button>
+      </form>
+      <div id="mfg-status" class="notice" hidden></div>
+    </section>
+
+    <section class="worklist-output">
+      <div class="output-heading"><div><p class="eyebrow">Calculated setup</p><h2 id="output-title">Enter work-list details</h2></div><span id="worklist-state" class="state-chip">Draft</span></div>
+      <div class="requirement-cards">
+        <div><strong id="required-sources">1</strong><span>source plate</span></div><div><strong id="required-tips">1</strong><span>tip rack</span></div><div><strong id="required-destinations">4</strong><span>destination plates</span></div><div><strong id="required-actions">96</strong><span>robot actions</span></div>
+      </div>
+      <div class="setup-grid">
+        <article class="setup-card"><div class="setup-title"><h3>Deck setup</h3><span>Front of robot ↓</span></div><div id="work-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div></article>
+        <article class="setup-card mapping-card"><div class="setup-title"><h3>Source mapping</h3><span id="mapping-summary">Column-major order</span></div><div class="mapping-scroll"><table><thead><tr><th>Constructs</th><th>Source</th><th>Destination</th></tr></thead><tbody id="mapping-body"></tbody></table></div></article>
+      </div>
+      <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="machine-ready" class="ready-button" disabled>Machine is ready</button></div>
+      <section id="delivery-panel" class="delivery-panel" hidden>
+        <div class="delivery-actions"><button id="download-protocol" class="primary-button">Download Python protocol</button><button id="simulate-worklist" class="secondary-button">Open in WL Simulation</button></div>
+        <form id="robot-upload-form" class="robot-upload-form">
+          <div><p class="eyebrow">Direct OT-2 submission</p><strong>Uploads for analysis—does not start a run</strong></div>
+          <label>Robot address<input id="robot-address" class="text-field" type="text" required placeholder="192.168.1.42"></label>
+          <label>Upload PIN<input id="upload-pin" class="text-field" type="password" required autocomplete="off"></label>
+          <button id="upload-to-robot" type="submit" class="secondary-button">Upload to OT-2</button>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <main id="simulator-screen" class="app-shell view-screen" hidden>
+    <aside class="sidebar">
+      <button class="back-button" data-route="landing">← All tools</button>
+      <label class="upload-button" for="protocol-file"><span aria-hidden="true">⇧</span> Upload protocol</label><input id="protocol-file" type="file" accept=".py,text/x-python">
+      <div class="file-card"><div class="file-icon">PY</div><div><strong id="file-name">colony_rearray.py</strong><small>Python API 2.28 · OT-2</small></div></div>
+      <section class="protocol-info"><p class="eyebrow">Loaded protocol</p><h2 id="protocol-title">E. coli Colony Rearray</h2><p id="protocol-description">96 constructs → four agar destination plates</p><div class="stats-grid"><div><strong id="stat-sources">12</strong><span>source columns</span></div><div><strong id="stat-destinations">48</strong><span>destination columns</span></div><div><strong id="stat-actions">96</strong><span>actions</span></div><div><strong>8</strong><span>channels</span></div></div></section>
+      <section class="volume-settings"><div><p class="eyebrow">Starting volume</p><small>Applied to occupied source wells</small></div><label><input id="start-volume" type="number" min="40" max="200" step="1" value="130"> µL</label></section>
+      <details class="estimator-info"><summary>Motion model assumptions</summary><dl><div><dt>XY gantry</dt><dd id="gantry-assumption">400 mm/s</dd></div><div><dt>Z axis</dt><dd>125 mm/s</dd></div><div><dt>P20 flow</dt><dd id="flow-assumption">7.6 µL/s</dd></div><div><dt>Safe nozzle Z</dt><dd>111 mm</dd></div><div><dt>Uncertainty</dt><dd>±20%</dd></div></dl></details>
+      <section class="steps-section"><div class="section-title"><span>Protocol actions</span><strong id="step-fraction">1 / 96</strong></div><div id="step-list" class="step-list" aria-live="polite"></div></section><div id="protocol-notice" class="notice" hidden></div>
+    </aside>
+    <section class="workspace">
+      <div class="view-grid">
+        <article class="view-panel top-panel"><div class="panel-header"><div><span class="view-kicker">Synchronized view</span><h2>Deck · top-down</h2></div><div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div></div><div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div></article>
+        <article class="view-panel quarter-panel"><div class="panel-header"><div><span class="view-kicker">Realistic motion preview</span><h2>OT-2 · three-quarter</h2></div><div class="camera-badge">3D&nbsp; ◇</div></div><div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div><div class="telemetry"><div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div><div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div><div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div><div class="tip-meter"><span>TIP LIQUID</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div></div></article>
+      </div>
+      <section class="transport"><button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button><button id="previous-button" class="icon-button" title="Previous action" aria-label="Previous action">│◀</button><button id="play-button" class="play-button" aria-label="Play simulation">▶</button><button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button><div class="timeline-group"><div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span><i id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</i><b id="time-label">00:00 / ~00:00</b></span></div><input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action"></div><label class="speed-control">Speed<select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></section>
+      <footer class="run-status"><span><i class="green"></i><strong>Tip tracking</strong> Active</span><span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span><span><i class="green"></i><strong>Motion model</strong> Geometry-based estimate</span><span class="local-badge">Protocol stays local until submitted</span></footer>
+    </section>
+  </main>
+  <div id="global-error" class="global-error" hidden></div>
+  <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
