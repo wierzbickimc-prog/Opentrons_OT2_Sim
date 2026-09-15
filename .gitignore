@@ -1,0 +1,4 @@
+.venv-sim/
+.sim-build/
+.sim-cache/
+__pycache__/

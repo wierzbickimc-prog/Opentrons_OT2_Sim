@@ -7,6 +7,11 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/apps/Opentrons_OT2_Sim
 EnvironmentFile=-%h/.config/ot2-visualizer.env
+# WL Simulation needs the OT-2 engine: run scripts/setup_simulator.sh once in the app
+# directory. server.py finds .venv-sim automatically (override with OT2_SIM_PYTHON).
+# Set OT2_SITE_PASSWORD in ot2-visualizer.env to require sign-in for the app.
+# Set OT2_UPLOAD_PIN in ot2-visualizer.env to enable robot upload; add
+# OT2_SIM_REQUIRE_PIN=1 to require the same PIN for simulation.
 ExecStart=/usr/bin/python3 %h/apps/Opentrons_OT2_Sim/server.py
 Restart=on-failure
 RestartSec=3

@@ -1,12 +1,15 @@
 # OT-2 Protocol Visualizer
 
-A browser-based manufacturing tool for creating 1–144 construct plating work lists and reviewing OT-2 protocols. It generates downloadable Python protocols, renders synchronized top-down and three-quarter views, animates the eight-channel pipette, and tracks tips and liquid volumes.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists and testing OT-2 protocols before they reach a robot. MFG_Plating generates downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks.
 
 ## Run locally
 
 ```bash
-python3 server.py
+scripts/setup_simulator.sh             # once: builds the OT-2 engine into .venv-sim (Python 3.10+, git, network)
+OT2_SITE_PASSWORD='your-password' python3 server.py
 ```
+
+`OT2_SITE_PASSWORD` gates the whole app: every page, asset, and API redirects to a sign-in page until the password is entered. Sessions last 12 hours, are signed with a per-process secret (restarting the server signs everyone out), and five wrong attempts from one address lock sign-in for five minutes. Leave the variable unset to disable the gate. Keep the password out of the repository: set it in the environment or in `~/.config/ot2-visualizer.env` on the host.
 
 Open <http://localhost:8766>. Choose **MFG_Plating** to create a work list or **WL Simulation** to review a protocol.
 
@@ -24,6 +27,45 @@ Then visit `http://HOST_IP:8766` from another machine on the internal network. U
 
 For a persistent per-user service, copy `deploy/ot2-visualizer.service` to `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, and enable it with `systemctl --user enable --now ot2-visualizer.service`.
 
+## WL Simulation
+
+Uploading a protocol (or choosing **Open in WL Simulation** from MFG_Plating) sends it to `POST /api/simulate`. The server runs `simulation/worker.py` in the `.venv-sim` interpreter, which:
+
+1. Runs Opentrons' protocol analysis to validate the file and find the pipettes and modules it needs.
+2. Starts Opentrons' Smoothie and module emulators on free localhost ports, configured with those pipettes and modules.
+3. Executes the protocol on the real OT-2 protocol engine and hardware controller, recording every serial write (G-code) and every gantry and plunger move, each tied to the protocol command that produced it.
+4. Runs `simulation/safety.py` over the result.
+
+The browser then plays back the recorded moves (including arc heights the engine chooses), shows the G-code in the console below the animation in step with playback, and lists safety findings; clicking a finding jumps to its step. **Download .gcode** saves the full capture, annotated by command.
+
+### Safety checks
+
+| Severity | Check |
+| --- | --- |
+| Error | Any Opentrons engine error: out of tips, volume over pipette maximum, deck conflicts, out-of-bounds moves, invalid locations. |
+| Error | Tip or nozzle end below the top of labware or a module while traveling, or on descent outside a well opening. |
+| Error | Tip end below a well bottom. |
+| Warning | Aspirating more than a well holds, aspirating with the tip above the liquid surface, or overfilling a well. |
+| Info | A channel aspirates from a well with no declared liquid (expected for MFG partial columns) or the protocol declares no liquids. |
+
+Limits: default deck calibration and nominal labware definitions (a calibrated robot differs by a few millimeters and labware offsets are not applied); collisions are checked for tip and nozzle ends, not the full pipette body; module walls are approximated by their labware seat height; liquid checks rely on `load_liquid`. Timing is an estimate from robot-config speed and acceleration limits.
+
+### Engine version
+
+The engine is pinned to OT-2 robot software **26.6.0** (API level 2.28). PyPI's `opentrons` package no longer supports OT-2 protocols at this API level, so the setup script builds it from the `Opentrons/opentrons-ot2` source tag. Motion and G-code change between releases, so match the robots: check **OT-2 App → Robot Settings → Advanced → Robot software version**, then rebuild with, for example, `OT2_ENGINE_VERSION=v26.6.0 scripts/setup_simulator.sh` (delete `.venv-sim` first when changing versions). The engine version is shown in the simulator sidebar and at `/api/health`.
+
+### Security
+
+Simulation executes uploaded Python on the server. It is open to anyone who can reach the page unless `OT2_SIM_REQUIRE_PIN=1` is set, which gates it behind `OT2_UPLOAD_PIN`. It runs one simulation at a time in a separate process group with a private temporary `HOME`, a minimal environment, CPU/memory/file limits, and a timeout (`OT2_SIM_TIMEOUT`, default 180 s), and binds emulators to localhost. This is basic isolation suited to trusted internal users, not a sandbox for untrusted code. Results are cached in `.sim-cache/` (last 50) by protocol content and engine version; the static file server only serves the app's top-level web files, so the cache, virtualenv, and source are not reachable over HTTP.
+
+### Tests
+
+```bash
+python3 -m unittest discover tests
+```
+
+`tests/test_simulation.py` runs the sample protocol and the fixtures in `tests/fixtures/` on the real engine and is skipped when `.venv-sim` is missing. Each fixture is a deliberately faulty protocol that must produce its finding.
+
 ## Prototype scope
 
 - MFG_Plating supports 1–144 constructs, two source plates, two tip racks, and up to six destination plates.
@@ -31,7 +73,6 @@ For a persistent per-user service, copy `deploy/ot2-visualizer.service` to `~/.c
 - Starting volume is 130 µL in each occupied source well. Each source well ends at 90 µL; each destination replicate receives 10 µL.
 - Generated files can be downloaded, opened directly in WL Simulation, or uploaded to an OT-2 for analysis.
 - Protocol files remain in the browser unless the operator explicitly chooses direct OT-2 submission.
-- The current parser recognizes and validates the supplied colony-rearray layout. A production version should use Opentrons' protocol-analysis output rather than executing arbitrary uploaded Python in the browser.
 
 ## Direct OT-2 upload
 
@@ -43,6 +84,4 @@ OT2_UPLOAD_PIN='replace-with-a-long-random-value' python3 server.py
 
 ## Motion and timing model
 
-The visualizer uses OT-2 deck pitch and the official A1/pitch/bottom-Z geometry for the three bundled labware load names. Each move is divided into a vertical retract, accelerated XY traversal, vertical descent, and liquid-handling operation. Defaults are 400 mm/s XY gantry speed, 125 mm/s Z speed, and 7.6 µL/s P20 Multi GEN2 aspiration/dispense flow. Explicit `default_speed`, `flow_rate.aspirate`, and `flow_rate.dispense` assignments in an uploaded file override those defaults.
-
-Estimated time excludes robot initialization, homing, calibration, network latency, user pauses, and hardware variation. Treat it as a planning estimate with approximately ±20% uncertainty until it has been calibrated against timestamps from a physical OT-2.
+Positions come from the engine's recorded moves, so arc heights, tip-pickup presses, and flow-rate-driven plunger speeds match what the engine commands. Each move's duration uses the robot config's per-axis speed and acceleration limits; homing between moves is bridged at 125 mm/s. Estimated time excludes robot initialization, calibration, network latency, user pauses, module temperature ramps, and hardware variation. Treat it as a planning estimate with approximately ±20% uncertainty until it has been calibrated against timestamps from a physical OT-2.

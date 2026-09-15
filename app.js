@@ -1,74 +1,42 @@
 "use strict";
 
-const COLORS = {
-  deck: "#29232d", deckEdge: "#76677b", slot: "#171219", slotEdge: "#4f4553",
-  plate: "#d9d4dc", plateEdge: "#928899", well: "#423848", source: "#f000dc",
-  destination: "#41d8f2", liquid: "#b44cff", tip: "#eadcff", robot: "#e5e2e6",
-  robotShade: "#928c95", dark: "#100a13", path: "#f000dc"
-};
-
-// OT-2 deck and labware geometry, in millimeters. Labware coordinates are
-// taken from the official Opentrons definitions bundled for these load names.
-const MOTION = {
-  slotPitchX: 132.5,
-  slotPitchY: 90.5,
-  deckOffsetX: 115.65,
-  deckOffsetY: 68.03,
-  wellA1X: 14.38,
-  wellA1Y: 74.24,
-  wellPitch: 9,
-  sourceBottomZ: 1.05,
-  destinationBottomZ: 3.55,
-  bottomClearance: 1,
-  tipRackTopZ: 64.69,
-  tipOverlap: 8.25,
-  exposedTipLength: 30.95,
-  safeZ: 111,
-  gantrySpeed: 400,
-  gantryAcceleration: 1000,
-  zSpeed: 125,
-  zAcceleration: 500,
-  aspirateFlowRate: 7.6,
-  dispenseFlowRate: 7.6,
-  pickupSeconds: 3.5,
-  dropSeconds: 2,
-  commandSettleSeconds: 0.15
-};
-
 const $ = (selector) => document.querySelector(selector);
 const topCanvas = $("#top-canvas");
 const quarterCanvas = $("#quarter-canvas");
 const topCtx = topCanvas.getContext("2d");
 const quarterCtx = quarterCanvas.getContext("2d");
+const GCODE_WINDOW_LINES = 160;
 
-function createWorkflow(constructCount, identifier, mode) {
+function createWorkflow(constructCount, identifier) {
   const count = Math.max(1, Math.min(144, Number(constructCount) || 1));
   const sourceColumns = Math.ceil(count / 8);
   const sourcePlateCount = Math.ceil(count / 96);
   const destinationPlateCount = Math.ceil(count / 24);
-  const legacy = mode === "legacy";
   return {
-    identifier: identifier || "WL-Simulation",
+    identifier: identifier || "MFG_Plating",
     constructCount: count,
     sourceColumns,
-    sourceSlots: legacy ? [5] : [7, 8].slice(0, sourcePlateCount),
-    tipSlots: legacy ? [6] : [10, 11].slice(0, sourcePlateCount),
-    destinationSlots: Array.from({ length: destinationPlateCount }, (_item, index) => index + 1),
-    mode: legacy ? "legacy" : "mfg"
+    sourceSlots: [7, 8].slice(0, sourcePlateCount),
+    tipSlots: [10, 11].slice(0, sourcePlateCount),
+    destinationSlots: Array.from({ length: destinationPlateCount }, (_item, index) => index + 1)
   };
 }
 
 const state = {
-  initialVolume: 130,
-  stepIndex: 0,
-  progress: 0,
+  model: null,
+  filename: "",
+  time: 0,
   playing: false,
   speed: 1,
   lastTime: 0,
-  steps: [],
-  uploadedSource: "",
-  generatedProtocol: "",
-  workflow: createWorkflow(96, "WL-Simulation", "legacy")
+  dirty: true,
+  renderedStep: -1,
+  gcodeKey: "",
+  pending: null,
+  running: false,
+  engineVersion: null,
+  pinRequired: false,
+  generatedProtocol: ""
 };
 
 function destinationFor(sourceIndex) {
@@ -77,164 +45,18 @@ function destinationFor(sourceIndex) {
   return { plate, columns: [firstColumn, firstColumn + 1, firstColumn + 2, firstColumn + 3] };
 }
 
-function makeDeckLocation(kind, slot, column = 0) { return { kind, slot, column }; }
-
-function buildSteps() {
-  const steps = [];
-  const workflow = state.workflow;
-  for (let source = 0; source < workflow.sourceColumns; source += 1) {
-    const dest = destinationFor(source);
-    const sourcePlate = Math.floor(source / 12);
-    const sourceColumn = source % 12;
-    const tipRack = Math.floor(source / 12);
-    const activeRows = Math.min(8, workflow.constructCount - source * 8);
-    const sourceLoc = makeDeckLocation("source", workflow.sourceSlots[sourcePlate], sourceColumn);
-    const tipLoc = makeDeckLocation("tips", workflow.tipSlots[tipRack], sourceColumn);
-    const destLoc = (index) => makeDeckLocation("destination", workflow.destinationSlots[dest.plate], dest.columns[index]);
-    const meta = { source, sourcePlate, sourceColumn, tipRack, activeRows, plate: dest.plate, columns: dest.columns };
-    steps.push(
-      { ...meta, type: "pickup", label: `Pick up 8 tips · rack ${tipRack + 1}, column ${sourceColumn + 1}`, volume: 0, location: tipLoc },
-      { ...meta, type: "aspirate", label: `Aspirate 20 µL · source ${sourcePlate + 1}, column ${sourceColumn + 1}`, volume: 20, location: sourceLoc },
-      { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[0] + 1}`, volume: 10, destColumn: dest.columns[0], location: destLoc(0) },
-      { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[1] + 1}`, volume: 10, destColumn: dest.columns[1], location: destLoc(1) },
-      { ...meta, type: "aspirate", label: `Aspirate 20 µL · source column ${source + 1}`, volume: 20, location: sourceLoc },
-      { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[2] + 1}`, volume: 10, destColumn: dest.columns[2], location: destLoc(2) },
-      { ...meta, type: "dispense", label: `Dispense 10 µL · plate ${dest.plate + 1}, column ${dest.columns[3] + 1}`, volume: 10, destColumn: dest.columns[3], location: destLoc(3) },
-      { ...meta, type: "drop", label: "Drop 8 tips · fixed trash", volume: 0, location: makeDeckLocation("trash", 12, 0) }
-    );
+// Signed-out or expired sessions get 401 from every API; send the user to sign in.
+async function apiFetch(url, options) {
+  const response = await fetch(url, options);
+  if (response.status === 401) {
+    window.location.href = "login";
+    throw new Error("Your session has ended. Sign in again.");
   }
-  state.steps = steps;
+  return response;
 }
 
-function derivedState() {
-  const sources = state.workflow.sourceSlots.map((_slot, plate) => Array.from({ length: 12 }, (_item, col) => Array.from({ length: 8 }, (_rowItem, row) => plate * 96 + col * 8 + row < state.workflow.constructCount ? state.initialVolume : 0)));
-  const destinations = state.workflow.destinationSlots.map(() => Array.from({ length: 12 }, () => Array(8).fill(0)));
-  const usedTipColumns = state.workflow.tipSlots.map(() => new Set());
-  let tipsAttached = false;
-  const tipVolumes = Array(8).fill(0);
-
-  state.steps.forEach((step, index) => {
-    let fraction = index < state.stepIndex ? 1 : 0;
-    if (index === state.stepIndex) {
-      const plan = actionPlan(index);
-      const operationStart = plan.retract + plan.traverse + plan.descend;
-      const elapsed = state.progress * plan.total;
-      fraction = plan.operation ? Math.max(0, Math.min(1, (elapsed - operationStart) / plan.operation)) : 1;
-    }
-    if (fraction <= 0) return;
-    if (step.type === "pickup") {
-      tipsAttached = fraction > 0.45;
-      if (fraction > 0.45) usedTipColumns[step.tipRack].add(step.sourceColumn);
-    } else if (step.type === "aspirate") {
-      for (let row = 0; row < step.activeRows; row += 1) {
-        sources[step.sourcePlate][step.sourceColumn][row] -= step.volume * fraction;
-        tipVolumes[row] += step.volume * fraction;
-      }
-    } else if (step.type === "dispense") {
-      for (let row = 0; row < step.activeRows; row += 1) {
-        destinations[step.plate][step.destColumn][row] += step.volume * fraction;
-        tipVolumes[row] -= step.volume * fraction;
-      }
-    } else if (step.type === "drop" && fraction > 0.6) {
-      tipsAttached = false;
-    }
-  });
-
-  return { sources, destinations, usedTipColumns, tipsAttached, tipVolumes: tipVolumes.map((volume) => Math.max(0, volume)) };
-}
-
-function previousLocation() {
-  if (state.stepIndex === 0) return makeDeckLocation("home", 12, 0);
-  return state.steps[state.stepIndex - 1].location;
-}
-
-function ease(t) { return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
-
-function workHeight(loc) {
-  if (loc.kind === "source") return MOTION.sourceBottomZ + MOTION.bottomClearance + MOTION.exposedTipLength;
-  if (loc.kind === "destination") return MOTION.destinationBottomZ + MOTION.bottomClearance + MOTION.exposedTipLength;
-  if (loc.kind === "tips") return MOTION.tipRackTopZ - MOTION.tipOverlap;
-  if (loc.kind === "trash") return 80;
-  return MOTION.safeZ;
-}
-
-function trapezoidSeconds(distance, maxSpeed, acceleration) {
-  const d = Math.max(0, distance);
-  if (!d) return 0;
-  const distanceToMax = maxSpeed * maxSpeed / acceleration;
-  if (d <= distanceToMax) return 2 * Math.sqrt(d / acceleration);
-  return 2 * maxSpeed / acceleration + (d - distanceToMax) / maxSpeed;
-}
-
-function operationSeconds(step) {
-  if (step.type === "aspirate") return step.volume / MOTION.aspirateFlowRate + MOTION.commandSettleSeconds;
-  if (step.type === "dispense") return step.volume / MOTION.dispenseFlowRate + MOTION.commandSettleSeconds;
-  if (step.type === "pickup") return MOTION.pickupSeconds;
-  if (step.type === "drop") return MOTION.dropSeconds;
-  return MOTION.commandSettleSeconds;
-}
-
-function actionPlan(index) {
-  const step = state.steps[index];
-  const previous = index === 0 ? makeDeckLocation("home", 12, 0) : state.steps[index - 1].location;
-  const from = deckCoordinate(previous);
-  const to = deckCoordinate(step.location);
-  const fromZ = index === 0 ? MOTION.safeZ : workHeight(previous);
-  const toZ = workHeight(step.location);
-  const retract = trapezoidSeconds(MOTION.safeZ - fromZ, MOTION.zSpeed, MOTION.zAcceleration);
-  const xyDistance = Math.hypot(to.x - from.x, to.y - from.y);
-  const traverse = trapezoidSeconds(xyDistance, MOTION.gantrySpeed, MOTION.gantryAcceleration);
-  const descend = trapezoidSeconds(MOTION.safeZ - toZ, MOTION.zSpeed, MOTION.zAcceleration);
-  const operation = operationSeconds(step);
-  const total = retract + traverse + descend + operation;
-  return { step, from, to, fromZ, toZ, retract, traverse, descend, operation, total };
-}
-
-function protocolSeconds() {
-  return state.steps.reduce((sum, _step, index) => sum + actionPlan(index).total, 0);
-}
-
-function elapsedProtocolSeconds() {
-  let elapsed = 0;
-  for (let index = 0; index < state.stepIndex; index += 1) elapsed += actionPlan(index).total;
-  return elapsed + actionPlan(state.stepIndex).total * state.progress;
-}
-
-function pipettePose() {
-  const plan = actionPlan(state.stepIndex);
-  const seconds = state.progress * plan.total;
-  let x = plan.from.x, y = plan.from.y, z = plan.fromZ;
-  if (seconds < plan.retract && plan.retract) {
-    z = plan.fromZ + (MOTION.safeZ - plan.fromZ) * ease(seconds / plan.retract);
-  } else if (seconds < plan.retract + plan.traverse && plan.traverse) {
-    const p = ease((seconds - plan.retract) / plan.traverse);
-    x = plan.from.x + (plan.to.x - plan.from.x) * p;
-    y = plan.from.y + (plan.to.y - plan.from.y) * p;
-    z = MOTION.safeZ;
-  } else if (seconds < plan.retract + plan.traverse + plan.descend && plan.descend) {
-    const p = ease((seconds - plan.retract - plan.traverse) / plan.descend);
-    x = plan.to.x; y = plan.to.y;
-    z = MOTION.safeZ + (plan.toZ - MOTION.safeZ) * p;
-  } else {
-    x = plan.to.x; y = plan.to.y; z = plan.toZ;
-  }
-  return { x, y, z, current: plan.step };
-}
-
-function deckCoordinate(loc) {
-  if (loc.kind === "home") return { x: 355, y: 342 };
-  if (loc.kind === "trash") return { x: 351.4, y: 342 };
-  const col = (loc.slot - 1) % 3;
-  const row = Math.floor((loc.slot - 1) / 3);
-  const x = col * MOTION.slotPitchX + 64;
-  const y = row * MOTION.slotPitchY + 43;
-  if (["source", "destination", "tips"].includes(loc.kind)) {
-    return {
-      x: col * MOTION.slotPitchX + MOTION.wellA1X + loc.column * MOTION.wellPitch,
-      y: row * MOTION.slotPitchY + MOTION.wellA1Y
-    };
-  }
-  return { x, y };
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function fitCanvas(canvas, ctx) {
@@ -249,238 +71,6 @@ function fitCanvas(canvas, ctx) {
   return { width: rect.width, height: rect.height };
 }
 
-function roundedRect(ctx, x, y, w, h, r) {
-  const radius = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  // Manual path instead of CanvasRenderingContext2D.roundRect(), which is
-  // unavailable in some Safari and managed Ubuntu browser installations.
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-}
-
-function slotPosition(slot, box) {
-  const col = (slot - 1) % 3;
-  const physicalRow = Math.floor((slot - 1) / 3);
-  const displayRow = 3 - physicalRow;
-  return { x: box.x + col * box.slotW, y: box.y + displayRow * box.slotH };
-}
-
-function drawPlateTop(ctx, x, y, w, h, type, values, highlightedColumns = []) {
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
-  roundedRect(ctx, x, y, w, h, 7); ctx.fillStyle = type === "tips" ? "#372d3d" : COLORS.plate; ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = COLORS.plateEdge; ctx.lineWidth = 1; ctx.stroke();
-  const padX = w * .09, padY = h * .12;
-  const dx = (w - 2 * padX) / 11, dy = (h - 2 * padY) / 7;
-  for (let col = 0; col < 12; col += 1) {
-    for (let row = 0; row < 8; row += 1) {
-      const cx = x + padX + col * dx, cy = y + padY + row * dy;
-      const active = highlightedColumns.includes(col);
-      const radius = Math.max(1.5, Math.min(dx, dy) * .31);
-      ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      if (type === "tips") {
-        const used = values.has(col);
-        ctx.fillStyle = used ? "#211a25" : "#d8b6ff";
-      } else if (type === "source") {
-        const volume = values[col][row];
-        const alpha = .22 + .72 * Math.max(0, volume) / state.initialVolume;
-        ctx.fillStyle = volume > 0 ? `rgba(240, 0, 220, ${alpha})` : "#65586a";
-      } else {
-        const volume = values[col][row];
-        ctx.fillStyle = volume > 0 ? `rgba(65, 216, 242, ${.25 + volume / 16})` : "#786d7c";
-      }
-      ctx.fill();
-      ctx.lineWidth = active ? 1.5 : .6;
-      ctx.strokeStyle = active ? (type === "source" ? COLORS.source : COLORS.destination) : "rgba(24,12,28,.68)";
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
-}
-
-function drawTop() {
-  const size = fitCanvas(topCanvas, topCtx); const ctx = topCtx;
-  ctx.clearRect(0, 0, size.width, size.height);
-  const margin = 22;
-  const deckW = Math.min(size.width - margin * 2, (size.height - margin * 2) * .79);
-  const deckH = Math.min(size.height - margin * 2, deckW / .79);
-  const x = (size.width - deckW) / 2, y = (size.height - deckH) / 2;
-  const box = { x: x + deckW * .07, y: y + deckH * .06, slotW: deckW * .286, slotH: deckH * .224 };
-  roundedRect(ctx, x, y, deckW, deckH, 16); ctx.fillStyle = COLORS.deck; ctx.fill();
-  ctx.strokeStyle = COLORS.deckEdge; ctx.lineWidth = 2; ctx.stroke();
-  ctx.fillStyle = "#a596aa"; ctx.font = "600 9px system-ui"; ctx.textAlign = "left";
-  const liquids = derivedState(); const current = state.steps[state.stepIndex];
-  const workflow = state.workflow;
-
-  for (let slot = 1; slot <= 12; slot += 1) {
-    const p = slotPosition(slot, box); const sw = box.slotW * .92, sh = box.slotH * .84;
-    ctx.fillStyle = "#97879c"; ctx.fillText(String(slot), p.x + 2, p.y + 10);
-    roundedRect(ctx, p.x + 10, p.y + 3, sw - 12, sh - 5, 6); ctx.fillStyle = COLORS.slot; ctx.fill(); ctx.strokeStyle = COLORS.slotEdge; ctx.stroke();
-    const lx = p.x + 14, ly = p.y + 7, lw = sw - 20, lh = sh - 13;
-    const destinationIndex = workflow.destinationSlots.indexOf(slot);
-    const sourceIndex = workflow.sourceSlots.indexOf(slot);
-    const tipIndex = workflow.tipSlots.indexOf(slot);
-    if (destinationIndex >= 0) {
-      const highlighted = current.plate === destinationIndex ? current.columns : [];
-      drawPlateTop(ctx, lx, ly, lw, lh, "destination", liquids.destinations[destinationIndex], highlighted);
-    } else if (sourceIndex >= 0) {
-      drawPlateTop(ctx, lx, ly, lw, lh, "source", liquids.sources[sourceIndex], current.sourcePlate === sourceIndex ? [current.sourceColumn] : []);
-    } else if (tipIndex >= 0) {
-      drawPlateTop(ctx, lx, ly, lw, lh, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : []);
-    } else if (slot === 12) {
-      roundedRect(ctx, lx, ly, lw, lh, 7); ctx.fillStyle = "#0e0a10"; ctx.fill(); ctx.strokeStyle = "#5c5260"; ctx.stroke();
-      ctx.fillStyle = "#a094a4"; ctx.textAlign = "center"; ctx.font = "700 8px system-ui"; ctx.fillText("FIXED TRASH", lx + lw / 2, ly + lh / 2 + 3); ctx.textAlign = "left";
-    }
-  }
-
-  const pose = pipettePose();
-  const px = box.x + pose.x / 397.5 * box.slotW * 3;
-  const py = box.y + (4 - pose.y / MOTION.slotPitchY) * box.slotH;
-  ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 1.5;
-  const dest = deckCoordinate(current.location); const prev = deckCoordinate(previousLocation());
-  ctx.beginPath();
-  ctx.moveTo(box.x + prev.x / 397.5 * box.slotW * 3, box.y + (4 - prev.y / MOTION.slotPitchY) * box.slotH);
-  ctx.lineTo(box.x + dest.x / 397.5 * box.slotW * 3, box.y + (4 - dest.y / MOTION.slotPitchY) * box.slotH); ctx.stroke();
-  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fillStyle = "rgba(240,0,220,.18)"; ctx.fill(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
-  if (["source", "destination", "tips"].includes(current.location.kind)) {
-    const pyH = box.y + (4 - (pose.y - 7 * MOTION.wellPitch) / MOTION.slotPitchY) * box.slotH;
-    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, pyH); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.stroke();
-  }
-  ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fillStyle = COLORS.path; ctx.fill(); ctx.restore();
-}
-
-function isoProject(x, y, z, view) {
-  const scale = Math.min(view.width / 610, view.height / 455);
-  return {
-    x: view.width * .49 + (x - y * .73) * scale,
-    y: view.height * .79 - (y * .37 + z) * scale
-  };
-}
-
-function polygon(ctx, points, fill, stroke = null) {
-  ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
-  ctx.fillStyle = fill; ctx.fill(); if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
-}
-
-function prism(ctx, x, y, z, w, d, h, view, colors) {
-  const p = (dx, dy, dz) => isoProject(x + dx, y + dy, z + dz, view);
-  polygon(ctx, [p(0,0,h), p(w,0,h), p(w,d,h), p(0,d,h)], colors.top, colors.edge);
-  polygon(ctx, [p(w,0,0), p(w,d,0), p(w,d,h), p(w,0,h)], colors.side, colors.edge);
-  polygon(ctx, [p(0,d,0), p(w,d,0), p(w,d,h), p(0,d,h)], colors.front, colors.edge);
-}
-
-function drawPlateIso(ctx, slot, type, values, highlighted, view) {
-  const col = (slot - 1) % 3, row = Math.floor((slot - 1) / 3);
-  const x = col * MOTION.slotPitchX, y = row * MOTION.slotPitchY;
-  const h = type === "tips" ? 64.69 : type === "source" ? 16 : 14.22;
-  prism(ctx, x, y, 0, 127.76, 85.48, h, view, { top: type === "tips" ? "#403449" : "#cfc9d2", side: "#706675", front: "#887d8c", edge: "#241a29" });
-  for (let c = 0; c < 12; c += 1) {
-    for (let r = 0; r < 8; r += 1) {
-      const point = isoProject(x + MOTION.wellA1X + c * MOTION.wellPitch, y + MOTION.wellA1Y - r * MOTION.wellPitch, h + .6, view);
-      const rx = Math.max(1.3, view.width / 720 * 2.2), ry = rx * .55;
-      ctx.beginPath(); ctx.ellipse(point.x, point.y, rx, ry, 0, 0, Math.PI * 2);
-      if (type === "tips") ctx.fillStyle = values.has(c) ? "#2b2330" : "#dabaff";
-      else if (type === "source") ctx.fillStyle = values[c][r] > 0 ? `rgba(240,0,220,${.3 + values[c][r] / 200})` : "#65586a";
-      else ctx.fillStyle = values[c][r] > 0 ? "#41d8f2" : "#786d7c";
-      ctx.fill();
-      if (highlighted.includes(c)) { ctx.strokeStyle = type === "source" ? COLORS.source : COLORS.destination; ctx.lineWidth = 1.2; ctx.stroke(); }
-    }
-  }
-}
-
-function drawQuarter() {
-  const view = fitCanvas(quarterCanvas, quarterCtx); const ctx = quarterCtx;
-  ctx.clearRect(0, 0, view.width, view.height);
-  const liquids = derivedState(); const current = state.steps[state.stepIndex];
-  const workflow = state.workflow;
-  const deckCorners = [[0,0],[397.5,0],[397.5,362],[0,362]].map(([x,y]) => isoProject(x,y,0,view));
-  polygon(ctx, deckCorners, "#29232d", "#807184");
-  prism(ctx, -17, -12, -18, 432, 392, 18, view, { top: "#3c3341", side: "#18111c", front: "#625767", edge: "#130d16" });
-
-  for (let row = 3; row >= 0; row -= 1) {
-    for (let col = 2; col >= 0; col -= 1) {
-      const slot = row * 3 + col + 1;
-      const destinationIndex = workflow.destinationSlots.indexOf(slot);
-      const sourceIndex = workflow.sourceSlots.indexOf(slot);
-      const tipIndex = workflow.tipSlots.indexOf(slot);
-      if (destinationIndex >= 0) drawPlateIso(ctx, slot, "destination", liquids.destinations[destinationIndex], current.plate === destinationIndex ? current.columns : [], view);
-      if (sourceIndex >= 0) drawPlateIso(ctx, slot, "source", liquids.sources[sourceIndex], current.sourcePlate === sourceIndex ? [current.sourceColumn] : [], view);
-      if (tipIndex >= 0) drawPlateIso(ctx, slot, "tips", liquids.usedTipColumns[tipIndex], current.type === "pickup" && current.tipRack === tipIndex ? [current.sourceColumn] : [], view);
-      if (slot === 12) prism(ctx, col * 132.5 + 8, row * 90.5 + 5, 4, 118, 78, 48, view, { top: "#0d090f", side: "#171019", front: "#241b27", edge: "#625766" });
-    }
-  }
-
-  // OT-2 enclosure posts and upper gantry.
-  prism(ctx, -30, 355, 0, 22, 22, 365, view, { top: "#263238", side: "#11191d", front: "#303d43", edge: "#0a0f12" });
-  prism(ctx, 405, -6, 0, 22, 22, 365, view, { top: "#263238", side: "#11191d", front: "#303d43", edge: "#0a0f12" });
-  prism(ctx, -20, 18, 300, 445, 28, 56, view, { top: "#f1f3f3", side: "#8d9ba1", front: "#dbe1e3", edge: "#65747b" });
-
-  const pose = pipettePose();
-  const bodyX = pose.x - 20, bodyY = pose.y - 42;
-  prism(ctx, bodyX, bodyY, pose.z + 55, 40, 26, 76, view, { top: "#e8edef", side: "#6f7d83", front: "#bdc8cc", edge: "#45535a" });
-  for (let channel = 0; channel < 8; channel += 1) {
-    const channelY = pose.y - channel * MOTION.wellPitch;
-    const tipPoint = isoProject(pose.x, channelY, pose.z, view);
-    const barrel = isoProject(pose.x, channelY, pose.z + 64, view);
-    ctx.strokeStyle = "#1c2529"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(barrel.x, barrel.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke();
-    if (liquids.tipsAttached) {
-      const end = isoProject(pose.x, channelY, pose.z - MOTION.exposedTipLength, view);
-      ctx.strokeStyle = COLORS.tip; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tipPoint.x, tipPoint.y); ctx.lineTo(end.x, end.y); ctx.stroke();
-      if (liquids.tipVolumes[channel] > 0) { ctx.strokeStyle = COLORS.liquid; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(end.x, end.y); ctx.lineTo(tipPoint.x, tipPoint.y); ctx.stroke(); }
-    }
-  }
-
-  const plan = actionPlan(state.stepIndex);
-  const pathPoints = [
-    isoProject(plan.from.x, plan.from.y, plan.fromZ, view),
-    isoProject(plan.from.x, plan.from.y, MOTION.safeZ, view),
-    isoProject(plan.to.x, plan.to.y, MOTION.safeZ, view),
-    isoProject(plan.to.x, plan.to.y, plan.toZ, view)
-  ];
-  ctx.save(); ctx.strokeStyle = COLORS.path; ctx.lineWidth = 2; ctx.setLineDash([7,6]); ctx.beginPath();
-  pathPoints.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
-  ctx.stroke(); ctx.restore();
-
-  const mmX = MOTION.deckOffsetX + pose.x, mmY = MOTION.deckOffsetY + pose.y;
-  $("#telemetry-x").textContent = mmX.toFixed(1);
-  $("#telemetry-y").textContent = mmY.toFixed(1);
-  $("#telemetry-z").textContent = pose.z.toFixed(1);
-  const activeLiquidTips = liquids.tipVolumes.filter((volume) => volume > .01);
-  const maximumTipVolume = activeLiquidTips.length ? Math.max(...activeLiquidTips) : 0;
-  const airTips = current.activeRows < 8 ? 8 - current.activeRows : 0;
-  $("#tip-volume").textContent = activeLiquidTips.length ? `${maximumTipVolume.toFixed(maximumTipVolume % 1 ? 1 : 0)} µL × ${activeLiquidTips.length}${airTips ? ` · air × ${airTips}` : ""}` : `0 µL${airTips ? ` · air × ${airTips}` : " × 8"}`;
-  $("#tip-fill").style.width = `${Math.min(100, maximumTipVolume / 20 * 100)}%`;
-}
-
-function renderStepList() {
-  const list = $("#step-list");
-  const start = Math.max(0, Math.min(state.steps.length - 8, state.stepIndex - 3));
-  list.innerHTML = state.steps.slice(start, start + 8).map((step, offset) => {
-    const index = start + offset;
-    const amount = step.volume ? `${step.volume} µL ×${step.activeRows}${step.activeRows < 8 ? ` · air ×${8 - step.activeRows}` : ""}` : "";
-    return `<div class="step-row ${index === state.stepIndex ? "active" : index < state.stepIndex ? "done" : ""}"><span class="num">${String(index + 1).padStart(2,"0")}</span><span class="label">${step.label}</span><span class="amount">${amount}</span></div>`;
-  }).join("");
-}
-
-function updateUI() {
-  const step = state.steps[state.stepIndex];
-  $("#step-fraction").textContent = `${state.stepIndex + 1} / ${state.steps.length}`;
-  $("#timeline").value = state.stepIndex;
-  $("#current-action").textContent = step.label;
-  $("#cycle-label").textContent = `Source col. ${step.source + 1}/${state.workflow.sourceColumns} · Plate ${step.plate + 1} · Dest. ${step.columns[0] + 1}–${step.columns[3] + 1}`;
-  updateTimeDisplay();
-  $("#play-button").textContent = state.playing ? "Ⅱ" : "▶";
-  renderStepList();
-}
-
 function formatDuration(seconds) {
   const rounded = Math.max(0, Math.round(seconds));
   const minutes = Math.floor(rounded / 60);
@@ -488,103 +78,276 @@ function formatDuration(seconds) {
   return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
-function updateTimeDisplay() {
-  $("#time-label").textContent = `${formatDuration(elapsedProtocolSeconds())} / ~${formatDuration(protocolSeconds())}`;
+
+// ------------------------------------------------------------ simulation run
+
+function showNotice(message, isError = false) {
+  const notice = $("#protocol-notice");
+  notice.hidden = !message;
+  notice.classList.toggle("error", Boolean(isError));
+  notice.textContent = message || "";
 }
 
-function draw() { drawTop(); drawQuarter(); }
+function showOverlay(title, detail, { sample = true } = {}) {
+  $("#sim-overlay").hidden = false;
+  $("#overlay-title").textContent = title;
+  $("#overlay-detail").textContent = detail;
+  $("#run-sample").hidden = !sample;
+}
 
-function setStep(index, progress = 0) {
-  state.stepIndex = Math.max(0, Math.min(state.steps.length - 1, index));
-  state.progress = progress; updateUI(); draw();
+function updateRunButton() {
+  const button = $("#run-simulation");
+  button.disabled = state.running || !state.pending || (state.pinRequired && !$("#sim-pin").value);
+  button.textContent = state.running ? "Running…" : "Run";
+}
+
+function simulatorFilename(name) {
+  const base = String(name || "protocol").replace(/\.py$/i, "").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[_.]+|_+$/g, "");
+  return `${(base || "protocol").slice(0, 110)}.py`;
+}
+
+function setPending(source) {
+  state.pending = source;
+  $("#file-name").textContent = source.sample ? "sample_protocol.py" : source.filename;
+  $("#file-meta").textContent = state.model && state.filename === source.filename ? $("#file-meta").textContent : "Ready to simulate";
+  updateRunButton();
+}
+
+async function runSimulation(source) {
+  if (state.running) return;
+  setPending(source);
+  const pin = $("#sim-pin").value;
+  if (state.pinRequired && !pin) {
+    showNotice("Enter the simulation PIN, then press Run.");
+    $("#sim-pin").focus();
+    return;
+  }
+  state.running = true;
+  state.playing = false;
+  updateRunButton();
+  showNotice("");
+  const engine = state.engineVersion ? `Opentrons OT-2 engine ${state.engineVersion}` : "the Opentrons OT-2 engine";
+  const started = Date.now();
+  const tick = () => showOverlay(`Running on ${engine}…`, `Executing the protocol against an emulated motor controller · ${Math.round((Date.now() - started) / 1000)} s`, { sample: false });
+  tick();
+  const timer = window.setInterval(tick, 1000);
+  try {
+    const response = await apiFetch("./api/simulate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(source.sample ? { pin, sample: true } : { pin, filename: source.filename, protocol: source.protocol })
+    });
+    let result;
+    try { result = await response.json(); } catch (_error) { throw new Error(`The server returned an unreadable response (${response.status}).`); }
+    if (!response.ok) throw new Error(result.error || `Simulation failed (${response.status}).`);
+    loadResult(result, source.sample ? "sample_protocol.py" : source.filename);
+  } catch (error) {
+    if (state.model) {
+      $("#sim-overlay").hidden = true;
+      showNotice(error.message, true);
+    } else {
+      showOverlay("The simulation did not run", error.message);
+      showNotice(error.message, true);
+    }
+  } finally {
+    window.clearInterval(timer);
+    state.running = false;
+    updateRunButton();
+  }
+}
+
+function loadResult(result, filename) {
+  const model = new SimulationModel(result);
+  state.model = model;
+  state.filename = filename;
+  state.time = 0;
+  state.playing = false;
+  state.renderedStep = -1;
+  state.gcodeKey = "";
+  state.dirty = true;
+
+  const metadata = result.metadata || {};
+  $("#file-name").textContent = filename;
+  $("#file-meta").textContent = `Python API ${result.engine.apiLevel || "?"} · OT-2`;
+  $("#protocol-title").textContent = metadata.protocolName || filename;
+  const pipettes = model.pipettes.map((p) => `${p.name} (${p.mount})`).join(", ") || "no pipettes";
+  $("#protocol-description").textContent = `${model.labware.length} labware · ${pipettes}`;
+  $("#stat-steps").textContent = model.steps.length;
+  $("#stat-tips").textContent = model.tipPickups.length;
+  $("#stat-gcode").textContent = model.gcode.length.toLocaleString();
+  $("#stat-time").textContent = formatDuration(model.estimatedSeconds);
+  $("#engine-version").textContent = `OT-2 ${result.engine.opentronsVersion}`;
+  $("#engine-api").textContent = result.engine.apiLevel || "—";
+  $("#status-engine").textContent = `OT-2 ${result.engine.opentronsVersion} · ${result.status}`;
+  $("#status-engine-dot").className = result.status === "succeeded" ? "green" : "red";
+  $("#timeline").max = Math.max(0, model.steps.length - 1);
+  $("#gcode-download").disabled = !model.gcode.length;
+  $("#sim-overlay").hidden = true;
+  renderSafety(model);
+  if (result.status !== "succeeded") {
+    showNotice("The protocol stopped with an Opentrons engine error. Steps up to the failure are shown; see Safety checks.", true);
+  } else {
+    showNotice("");
+  }
+  updateUI();
+}
+
+// ------------------------------------------------------------ safety panel
+
+function renderSafety(model) {
+  const safety = model.safety;
+  const counts = safety.counts || {};
+  const card = $("#safety-card");
+  card.dataset.status = safety.status;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const title = safety.status === "fail"
+    ? `${plural(counts.error, "error")}${counts.warning ? ` · ${plural(counts.warning, "warning")}` : ""}`
+    : safety.status === "warn" ? plural(counts.warning, "warning") : "No problems found";
+  $("#safety-title").textContent = title;
+  $("#safety-pill").textContent = { pass: "PASS", warn: "WARN", fail: "FAIL" }[safety.status] || "—";
+  $("#status-safety").textContent = title + (counts.info ? ` · ${plural(counts.info, "note")}` : "");
+  $("#status-safety-dot").className = { pass: "green", warn: "amber", fail: "red" }[safety.status] || "cyan";
+  const rows = safety.findings.slice(0, 150).map((finding, index) => {
+    const step = model.stepForCommand(finding.command);
+    return `<button class="finding ${finding.severity}" data-step="${step}" data-finding="${index}" type="button"><i></i><span>${escapeHtml(finding.message)}</span><b>Step ${step + 1}</b></button>`;
+  });
+  if (safety.truncated || safety.findings.length > 150) rows.push(`<p class="finding-more">Showing the first 150 findings.</p>`);
+  $("#safety-findings").innerHTML = rows.join("");
+  $("#safety-limitations").innerHTML = (safety.limitations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+}
+
+// ------------------------------------------------------------ playback UI
+
+function currentStepIndex() { return state.model ? state.model.stepAt(state.time) : 0; }
+
+function setStep(index) {
+  if (!state.model) return;
+  const clamped = Math.max(0, Math.min(state.model.steps.length - 1, index));
+  state.time = state.model.steps[clamped].start;
+  state.dirty = true;
+  updateUI();
+}
+
+function updateUI() {
+  const model = state.model;
+  $("#play-button").textContent = state.playing ? "Ⅱ" : "▶";
+  if (!model) return;
+  const index = currentStepIndex();
+  const step = model.steps[index];
+  $("#step-fraction").textContent = `${index + 1} / ${model.steps.length}`;
+  $("#timeline").value = index;
+  $("#current-action").textContent = step ? step.command.label : "—";
+  const pipette = step && model.pipetteByMount[model.mountForPipette(step.command.params.pipetteId)];
+  $("#cycle-label").textContent = step ? `Command ${step.command.index + 1}${pipette ? ` · ${pipette.name} (${pipette.mount})` : ""}` : "—";
+  $("#time-label").textContent = `${formatDuration(state.time)} / ~${formatDuration(model.totalSeconds)}`;
+  if (index !== state.renderedStep) {
+    state.renderedStep = index;
+    renderStepList(model, index);
+    document.querySelectorAll("#safety-findings .finding").forEach((row) => row.classList.toggle("active", Number(row.dataset.step) === index));
+  }
+}
+
+function renderStepList(model, index) {
+  const start = Math.max(0, Math.min(model.steps.length - 8, index - 3));
+  const severityByStep = new Map();
+  for (const finding of model.safety.findings) {
+    if (finding.severity === "info") continue;
+    const step = model.stepForCommand(finding.command);
+    if (severityByStep.get(step) !== "error") severityByStep.set(step, finding.severity);
+  }
+  $("#step-list").innerHTML = model.steps.slice(start, start + 8).map((step, offset) => {
+    const i = start + offset;
+    const command = step.command;
+    const pipette = model.pipetteByMount[model.mountForPipette(command.params.pipetteId)];
+    const volume = command.params.volume;
+    const amount = typeof volume === "number" && pipette ? `${volume} µL${pipette.channels > 1 ? ` ×${pipette.channels}` : ""}` : "";
+    const flag = severityByStep.get(i);
+    const classes = ["step-row", i === index ? "active" : i < index ? "done" : "", flag ? `flag-${flag}` : ""].join(" ");
+    return `<button class="${classes}" data-step="${i}" type="button"><span class="num">${String(i + 1).padStart(2, "0")}</span><span class="label">${escapeHtml(command.label)}</span><span class="amount">${amount}</span></button>`;
+  }).join("");
+}
+
+function updateTelemetry() {
+  const model = state.model;
+  if (!model) return;
+  const pose = model.poseAt(state.time);
+  const channel = model.channelsAt(pose.mount, pose.carriage, (pose.tips || {})[pose.mount])[0];
+  if (channel) {
+    $("#telemetry-x").textContent = channel.x.toFixed(1);
+    $("#telemetry-y").textContent = channel.y.toFixed(1);
+    $("#telemetry-z").textContent = channel.endZ.toFixed(1);
+  }
+  const pipette = model.pipetteByMount[pose.mount];
+  const tips = model.liquidAt(state.time).tips[pose.mount] || [];
+  const filled = tips.filter((volume) => volume > .01);
+  const maximum = filled.length ? Math.max(...filled) : 0;
+  const shown = maximum % 1 ? maximum.toFixed(1) : maximum.toFixed(0);
+  $("#tip-volume").textContent = filled.length ? `${shown} µL × ${filled.length}` : `0 µL × ${tips.length || 1}`;
+  $("#tip-fill").style.width = `${Math.min(100, pipette ? maximum / pipette.maxVolume * 100 : 0)}%`;
+}
+
+function renderGcode() {
+  const body = $("#gcode-lines");
+  const model = state.model;
+  if (!model) { body.innerHTML = ""; return; }
+  const follow = $("#gcode-follow").checked;
+  if (!follow && state.playing) return;
+  const revealed = model.gcodeRevealedAt(state.time);
+  const showPolling = $("#gcode-polling").checked;
+  const stepCommand = (model.steps[currentStepIndex()] || {}).command;
+  const key = `${revealed}|${showPolling}|${stepCommand ? stepCommand.index : ""}`;
+  if (key === state.gcodeKey) return;
+  state.gcodeKey = key;
+  const rows = [];
+  for (let i = revealed - 1; i >= 0 && rows.length < GCODE_WINDOW_LINES; i -= 1) {
+    if (!showPolling && isPollingGcode(model.gcode[i])) continue;
+    rows.push(i);
+  }
+  rows.reverse();
+  const latest = rows[rows.length - 1];
+  body.innerHTML = rows.map((i) => {
+    const [command, device, code, response] = model.gcode[i];
+    const classes = ["gline", stepCommand && command === stepCommand.index ? "current" : "", i === latest ? "latest" : ""].join(" ");
+    const help = explainGcode(code);
+    return `<div class="${classes}"${help ? ` title="${escapeHtml(help)}"` : ""}><span class="gnum">${i + 1}</span>${device === "smoothie" ? "" : `<span class="gdev">${escapeHtml(device)}</span>`}<span class="gcode">${escapeHtml(code)}</span>${response ? `<span class="gresp">→ ${escapeHtml(response)}</span>` : ""}</div>`;
+  }).join("") || `<div class="gline empty">No G-code sent yet.</div>`;
+  if (follow) body.scrollTop = body.scrollHeight;
+  $("#gcode-status").textContent = `${revealed.toLocaleString()} / ${model.gcode.length.toLocaleString()} lines · Smoothie serial`;
+}
+
+function draw() {
+  drawTopView(topCanvas, topCtx, state.model, state.time);
+  drawQuarterView(quarterCanvas, quarterCtx, state.model, state.time);
+  updateTelemetry();
+  renderGcode();
+  state.dirty = false;
 }
 
 function showRenderError(error) {
   state.playing = false;
-  const notice = $("#protocol-notice");
-  notice.hidden = false;
-  notice.classList.add("error");
-  notice.textContent = `Renderer error: ${error.message}. Reload after updating the app, or copy this message for troubleshooting.`;
+  showNotice(`Renderer error: ${error.message}. Reload after updating the app, or copy this message for troubleshooting.`, true);
   console.error(error);
 }
 
 function animate(time) {
   if (!state.lastTime) state.lastTime = time;
-  const delta = time - state.lastTime; state.lastTime = time;
-  if (state.playing) {
-    state.progress += delta * state.speed / (actionPlan(state.stepIndex).total * 1000);
-    if (state.progress >= 1) {
-      if (state.stepIndex >= state.steps.length - 1) { state.progress = 1; state.playing = false; }
-      else { state.stepIndex += 1; state.progress = 0; updateUI(); }
-    }
-    updateTimeDisplay();
-  }
+  const delta = time - state.lastTime;
+  state.lastTime = time;
   try {
-    if (!$("#simulator-screen").hidden) draw();
+    if (state.playing && state.model) {
+      state.time += delta * state.speed / 1000;
+      if (state.time >= state.model.totalSeconds) {
+        state.time = state.model.totalSeconds;
+        state.playing = false;
+      }
+      state.dirty = true;
+      updateUI();
+    }
+    if (state.dirty && !$("#simulator-screen").hidden) draw();
     requestAnimationFrame(animate);
   } catch (error) {
     showRenderError(error);
   }
-}
-
-function parseProtocol(text, filename) {
-  if (!/from\s+opentrons\s+import\s+protocol_api/.test(text) || !/load_instrument\s*\(/.test(text)) {
-    throw new Error("This file does not look like an Opentrons Python API protocol.");
-  }
-  const nameMatch = text.match(/["']protocolName["']\s*:\s*["']([^"']+)/);
-  const apiMatch = text.match(/["']apiLevel["']\s*:\s*["']([^"']+)/);
-  const robotMatch = text.match(/["']robotType["']\s*:\s*["']([^"']+)/);
-  const name = nameMatch ? nameMatch[1] : "";
-  const api = apiMatch ? apiMatch[1] : "unknown";
-  const robot = robotMatch ? robotMatch[1] : "OT-2";
-  const gantryMatch = text.match(/\.default_speed\s*=\s*([0-9.]+)/);
-  const aspirateFlowMatch = text.match(/\.flow_rate\.aspirate\s*=\s*([0-9.]+)/);
-  const dispenseFlowMatch = text.match(/\.flow_rate\.dispense\s*=\s*([0-9.]+)/);
-  const initialVolumeMatch = text.match(/load_liquid\s*\([\s\S]*?volume\s*=\s*([0-9.]+)/);
-  const countMatch = text.match(/CONSTRUCT_COUNT\s*=\s*(\d+)/);
-  const identifierMatch = text.match(/WORKLIST_ID\s*=\s*["']([^"']+)/);
-  MOTION.gantrySpeed = gantryMatch ? Number(gantryMatch[1]) : 400;
-  MOTION.aspirateFlowRate = aspirateFlowMatch ? Number(aspirateFlowMatch[1]) : 7.6;
-  MOTION.dispenseFlowRate = dispenseFlowMatch ? Number(dispenseFlowMatch[1]) : 7.6;
-  if (initialVolumeMatch) {
-    state.initialVolume = Number(initialVolumeMatch[1]);
-    $("#start-volume").value = state.initialVolume;
-  }
-  $("#gantry-assumption").textContent = `${MOTION.gantrySpeed} mm/s`;
-  $("#flow-assumption").textContent = `${MOTION.aspirateFlowRate}/${MOTION.dispenseFlowRate} µL/s`;
-  $("#file-name").textContent = filename;
-  $("#file-name").nextElementSibling.textContent = `Python API ${api} · ${robot}`;
-  if (name) $("#protocol-title").textContent = name.replace(" - PCR Plate to Omnitrays", "");
-  if (countMatch) applyWorkflow(createWorkflow(Number(countMatch[1]), identifierMatch ? identifierMatch[1] : filename, "mfg"));
-  else applyWorkflow(createWorkflow(96, filename, "legacy"));
-  const notice = $("#protocol-notice");
-  const hasExpectedLayout = /source_plate[\s\S]*?\b5\s*\)/.test(text) && /tiprack[\s\S]*?\b6\s*\)/.test(text) && /\[1\s*,\s*2\s*,\s*3\s*,\s*4\]/.test(text);
-  const hasFlattenBug = /for\s+col\s+in\s+dest_columns\s+for\s+well\s+in\s+col/.test(text);
-  notice.hidden = false;
-  if (countMatch) {
-    notice.textContent = `MFG work list recognized: ${state.workflow.constructCount} constructs across ${state.workflow.sourceColumns} source columns.`;
-  } else if (!hasExpectedLayout) {
-    notice.textContent = "Uploaded successfully. This prototype currently renders the colony-rearray deck template; broader Python protocol parsing is the next integration step.";
-  } else if (hasFlattenBug) {
-    notice.textContent = "Column-selection issue detected. Previewing intended A-row primary targets across four destination columns.";
-  } else {
-    notice.textContent = "Protocol layout recognized. Preview generated locally.";
-  }
-  state.uploadedSource = text;
-}
-
-function applyWorkflow(workflow) {
-  state.workflow = workflow;
-  state.playing = false;
-  state.stepIndex = 0;
-  state.progress = 0;
-  buildSteps();
-  $("#timeline").max = Math.max(0, state.steps.length - 1);
-  $("#stat-sources").textContent = workflow.sourceColumns;
-  $("#stat-destinations").textContent = workflow.sourceColumns * 4;
-  $("#stat-actions").textContent = state.steps.length;
-  $("#protocol-description").textContent = `${workflow.constructCount} constructs → ${workflow.destinationSlots.length} destination plate${workflow.destinationSlots.length === 1 ? "" : "s"}`;
-  setStep(0, 0);
 }
 
 function routeTo(route) {
@@ -594,13 +357,32 @@ function routeTo(route) {
   const labels = {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
-    simulator: ["WL Simulation", "Synchronized OT-2 motion and liquid preview"]
+    simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"]
   };
   $("#app-title").textContent = labels[route][0];
   $("#app-subtitle").textContent = labels[route][1];
-  if (route === "simulator") window.setTimeout(draw, 0);
+  if (route === "simulator") { state.dirty = true; window.setTimeout(draw, 0); }
 }
 
+async function checkSimulator() {
+  try {
+    const response = await apiFetch("./api/health", { cache: "no-store" });
+    const health = await response.json();
+    const simulator = health.simulator || {};
+    state.engineVersion = simulator.engineVersion || null;
+    state.pinRequired = Boolean(simulator.pinRequired);
+    $("#sign-out").hidden = !health.siteLogin;
+    $(".sim-pin-row").hidden = !state.pinRequired;
+    updateRunButton();
+    $("#engine-version").textContent = simulator.installed ? `OT-2 ${simulator.engineVersion || "unknown"}` : "Not installed";
+    $("#status-engine").textContent = simulator.installed ? `OT-2 ${simulator.engineVersion || "unknown"} · ready` : "Not installed";
+    if (!simulator.installed && !state.model) {
+      showOverlay("The OT-2 simulator is not installed on this server", "Run scripts/setup_simulator.sh on the server, then restart server.py.", { sample: false });
+    }
+  } catch (_error) {
+    $("#engine-version").textContent = "Server unavailable";
+  }
+}
 function deckItemFor(workflow, slot) {
   const destination = workflow.destinationSlots.indexOf(slot);
   const source = workflow.sourceSlots.indexOf(slot);
@@ -645,7 +427,7 @@ function generateProtocol(workflow) {
   return `from opentrons import protocol_api
 
 metadata = {
-    "protocolName": "MFG_Plating - " + ${pythonString(workflow.identifier)},
+    "protocolName": ${pythonString(`MFG_Plating - ${workflow.identifier}`)},
     "author": "OT-2 Manufacturing Tools",
     "description": "Four 10 uL destination replicates for ${workflow.constructCount} constructs",
     "worklistId": ${pythonString(workflow.identifier)},
@@ -725,16 +507,6 @@ function showMfgStatus(message, isError) {
   status.textContent = message;
 }
 
-$("#play-button").addEventListener("click", () => { if (state.stepIndex === state.steps.length - 1 && state.progress === 1) setStep(0,0); state.playing = !state.playing; updateUI(); });
-$("#restart-button").addEventListener("click", () => { state.playing = false; setStep(0,0); });
-$("#previous-button").addEventListener("click", () => { state.playing = false; setStep(state.stepIndex - 1,0); });
-$("#next-button").addEventListener("click", () => { state.playing = false; setStep(state.stepIndex + 1,0); });
-$("#timeline").addEventListener("input", (event) => { state.playing = false; setStep(Number(event.target.value),0); });
-$("#speed-select").addEventListener("change", (event) => { state.speed = Number(event.target.value); });
-$("#start-volume").addEventListener("change", (event) => {
-  state.initialVolume = Math.max(40, Math.min(200, Number(event.target.value) || 130));
-  event.target.value = state.initialVolume; $(".run-status .cyan").parentElement.innerHTML = `<i class="cyan"></i><strong>Liquid tracking</strong> ${state.initialVolume} µL initial`; draw();
-});
 function readLocalFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -744,11 +516,53 @@ function readLocalFile(file) {
   });
 }
 
-$("#protocol-file").addEventListener("change", async (event) => {
-  const file = event.target.files[0]; if (!file) return;
-  try { parseProtocol(await readLocalFile(file), file.name); }
-  catch (error) { const notice = $("#protocol-notice"); notice.hidden = false; notice.textContent = error.message; }
+
+$("#play-button").addEventListener("click", () => {
+  if (!state.model) return;
+  if (state.time >= state.model.totalSeconds) state.time = 0;
+  state.playing = !state.playing;
+  state.dirty = true;
+  updateUI();
 });
+$("#restart-button").addEventListener("click", () => { state.playing = false; setStep(0); });
+$("#previous-button").addEventListener("click", () => { state.playing = false; setStep(currentStepIndex() - 1); });
+$("#next-button").addEventListener("click", () => { state.playing = false; setStep(currentStepIndex() + 1); });
+$("#timeline").addEventListener("input", (event) => { state.playing = false; setStep(Number(event.target.value)); });
+$("#speed-select").addEventListener("change", (event) => { state.speed = Number(event.target.value); });
+$("#step-list").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-step]");
+  if (row) { state.playing = false; setStep(Number(row.dataset.step)); }
+});
+$("#safety-findings").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-step]");
+  if (row) { state.playing = false; setStep(Number(row.dataset.step)); }
+});
+$("#gcode-polling").addEventListener("change", () => { state.gcodeKey = ""; state.dirty = true; });
+$("#gcode-follow").addEventListener("change", () => { state.gcodeKey = ""; state.dirty = true; });
+$("#gcode-download").addEventListener("click", () => {
+  if (!state.model) return;
+  const blob = new Blob([gcodeFileText(state.model, state.filename)], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = state.filename.replace(/\.py$/i, "") + ".gcode";
+  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+});
+
+$("#protocol-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const protocol = await readLocalFile(file);
+    await runSimulation({ filename: simulatorFilename(file.name), protocol });
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+});
+$("#sim-pin").addEventListener("input", updateRunButton);
+$("#sim-pin").addEventListener("keydown", (event) => { if (event.key === "Enter" && state.pending) runSimulation(state.pending); });
+$("#run-simulation").addEventListener("click", () => { if (state.pending) runSimulation(state.pending); });
+$("#run-sample").addEventListener("click", () => runSimulation({ sample: true, filename: "sample_protocol.py" }));
 
 let draftWorkflow = null;
 
@@ -776,7 +590,7 @@ $("#worklist-form").addEventListener("submit", (event) => {
   const count = Number($("#construct-count").value);
   if (!identifier) { showMfgStatus("Enter a unique identifier.", true); return; }
   if (!Number.isInteger(count) || count < 1 || count > 144) { showMfgStatus("Construct count must be a whole number from 1 through 144.", true); return; }
-  draftWorkflow = createWorkflow(count, identifier, "mfg");
+  draftWorkflow = createWorkflow(count, identifier);
   renderWorklist(draftWorkflow);
   $("#machine-ready").disabled = false;
   $("#delivery-panel").hidden = true;
@@ -805,16 +619,12 @@ $("#download-protocol").addEventListener("click", () => {
   showMfgStatus(`Downloaded ${link.download}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
 });
 
+
 $("#simulate-worklist").addEventListener("click", () => {
   if (!draftWorkflow || !state.generatedProtocol) return;
-  applyWorkflow(draftWorkflow);
-  state.uploadedSource = state.generatedProtocol;
-  $("#file-name").textContent = safeFilename(draftWorkflow.identifier);
-  $("#file-name").nextElementSibling.textContent = "Python API 2.28 · OT-2";
-  $("#protocol-title").textContent = `MFG_Plating · ${draftWorkflow.identifier}`;
-  $("#protocol-notice").hidden = false;
-  $("#protocol-notice").textContent = "Generated work list loaded. Direct upload remains disabled from the simulation screen.";
+  if (!$("#sim-pin").value && $("#upload-pin").value) $("#sim-pin").value = $("#upload-pin").value;
   routeTo("simulator");
+  runSimulation({ filename: safeFilename(draftWorkflow.identifier), protocol: state.generatedProtocol });
 });
 
 $("#robot-upload-form").addEventListener("submit", async (event) => {
@@ -823,7 +633,7 @@ $("#robot-upload-form").addEventListener("submit", async (event) => {
   const button = $("#upload-to-robot");
   button.disabled = true; button.textContent = "Uploading…";
   try {
-    const response = await fetch("./api/ot2/upload", {
+    const response = await apiFetch("./api/ot2/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -845,7 +655,8 @@ $("#robot-upload-form").addEventListener("submit", async (event) => {
   }
 });
 
-buildSteps(); $("#timeline").max = state.steps.length - 1; updateUI();
-if ("ResizeObserver" in window) new ResizeObserver(draw).observe($(".view-grid"));
-else window.addEventListener("resize", draw);
+
+if ("ResizeObserver" in window) new ResizeObserver(() => { state.dirty = true; }).observe($(".view-grid"));
+else window.addEventListener("resize", () => { state.dirty = true; });
+checkSimulator();
 requestAnimationFrame(animate);

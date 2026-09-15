@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#1a0b20">
   <title>OT-2 Manufacturing Tools</title>
-  <link rel="stylesheet" href="styles.css?v=7">
-  <link rel="stylesheet" href="brand.css?v=1">
+  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="brand.css?v=3">
 </head>
 <body>
   <header class="app-header">
@@ -16,13 +16,14 @@
     </button>
     <div class="header-page"><h1 id="app-title">OT-2 Manufacturing Tools</h1><p id="app-subtitle">Protocol planning, generation, and simulation</p></div>
     <div class="header-status"><span class="status-dot"></span><span id="header-status-text">OT-2 WORKSTATION</span></div>
+    <a id="sign-out" class="sign-out" href="logout" hidden>Sign out</a>
   </header>
 
   <main id="landing-screen" class="landing-screen view-screen">
     <section class="landing-copy"><p class="eyebrow">Internal manufacturing tools</p><h2>OT-2 Manufacturing Tools</h2><p>Prepare, verify, and visualize manufacturing runs.</p></section>
     <section class="landing-options">
       <button id="open-mfg" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Plating</strong><small>Create a mapped work list and robot-ready protocol.</small></span><b>→</b></button>
-      <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Upload a protocol and inspect every movement.</small></span><b>→</b></button>
+      <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Run a protocol on the OT-2 engine: motion, G-code, and safety checks.</small></span><b>→</b></button>
     </section>
   </main>
 
@@ -70,23 +71,34 @@
     <aside class="sidebar">
       <button class="back-button" data-route="landing">← All tools</button>
       <label class="upload-button" for="protocol-file"><span aria-hidden="true">⇧</span> Upload protocol</label><input id="protocol-file" type="file" accept=".py,text/x-python">
-      <div class="file-card"><div class="file-icon">PY</div><div><strong id="file-name">colony_rearray.py</strong><small>Python API 2.28 · OT-2</small></div></div>
-      <section class="protocol-info"><p class="eyebrow">Loaded protocol</p><h2 id="protocol-title">E. coli Colony Rearray</h2><p id="protocol-description">96 constructs → four agar destination plates</p><div class="stats-grid"><div><strong id="stat-sources">12</strong><span>source columns</span></div><div><strong id="stat-destinations">48</strong><span>destination columns</span></div><div><strong id="stat-actions">96</strong><span>actions</span></div><div><strong>8</strong><span>channels</span></div></div></section>
-      <section class="volume-settings"><div><p class="eyebrow">Starting volume</p><small>Applied to occupied source wells</small></div><label><input id="start-volume" type="number" min="40" max="200" step="1" value="130"> µL</label></section>
-      <details class="estimator-info"><summary>Motion model assumptions</summary><dl><div><dt>XY gantry</dt><dd id="gantry-assumption">400 mm/s</dd></div><div><dt>Z axis</dt><dd>125 mm/s</dd></div><div><dt>P20 flow</dt><dd id="flow-assumption">7.6 µL/s</dd></div><div><dt>Safe nozzle Z</dt><dd>111 mm</dd></div><div><dt>Uncertainty</dt><dd>±20%</dd></div></dl></details>
-      <section class="steps-section"><div class="section-title"><span>Protocol actions</span><strong id="step-fraction">1 / 96</strong></div><div id="step-list" class="step-list" aria-live="polite"></div></section><div id="protocol-notice" class="notice" hidden></div>
+      <div class="sim-pin-row" hidden><label for="sim-pin">Simulation PIN</label><input id="sim-pin" class="text-field" type="password" autocomplete="off" placeholder="Required to run"><button id="run-simulation" class="secondary-button" type="button" disabled>Run</button></div>
+      <div class="file-card"><div class="file-icon">PY</div><div><strong id="file-name">No protocol loaded</strong><small id="file-meta">Upload an OT-2 Python protocol</small></div></div>
+      <section class="protocol-info"><p class="eyebrow">Loaded protocol</p><h2 id="protocol-title">—</h2><p id="protocol-description">Runs on the Opentrons OT-2 engine with an emulated motor controller.</p><div class="stats-grid"><div><strong id="stat-steps">—</strong><span>robot steps</span></div><div><strong id="stat-tips">—</strong><span>tip pickups</span></div><div><strong id="stat-gcode">—</strong><span>G-code lines</span></div><div><strong id="stat-time">—</strong><span>est. run time</span></div></div></section>
+      <section id="safety-card" class="safety-card" data-status="idle">
+        <div class="safety-heading"><div><p class="eyebrow">Safety checks</p><strong id="safety-title">Not run</strong></div><span id="safety-pill" class="safety-pill">—</span></div>
+        <div id="safety-findings" class="safety-findings"></div>
+        <details class="safety-limits"><summary>What is checked</summary><ul id="safety-limitations"><li>Engine errors: tips, volumes, deck conflicts, bounds.</li><li>Tip and nozzle collisions with labware and modules.</li><li>Well-bottom strikes, overflow, insufficient liquid, aspirating air.</li></ul></details>
+      </section>
+      <details class="estimator-info"><summary>Simulation engine</summary><dl><div><dt>Engine</dt><dd id="engine-version">checking…</dd></div><div><dt>Robot</dt><dd>OT-2 · emulated Smoothie</dd></div><div><dt>API level</dt><dd id="engine-api">—</dd></div><div><dt>Calibration</dt><dd>Default (uncalibrated)</dd></div><div><dt>Timing</dt><dd>Estimate · ±20%</dd></div></dl><p class="engine-note">Match the engine to the robot's software version (OT-2 App → Robot Settings → Advanced).</p></details>
+      <section class="steps-section"><div class="section-title"><span>Protocol steps</span><strong id="step-fraction">0 / 0</strong></div><div id="step-list" class="step-list" aria-live="polite"></div></section><div id="protocol-notice" class="notice" hidden></div>
     </aside>
     <section class="workspace">
       <div class="view-grid">
-        <article class="view-panel top-panel"><div class="panel-header"><div><span class="view-kicker">Live simulation</span><h2>TOP-DOWN DECK</h2></div><div class="legend"><span class="source-key">Source</span><span class="destination-key">Destination</span></div></div><div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div></article>
-        <article class="view-panel quarter-panel"><div class="panel-header"><div><span class="view-kicker">Live simulation</span><h2>THREE-QUARTER VIEW</h2></div><div class="camera-badge">3D&nbsp; ◇</div></div><div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div><div class="telemetry"><div><span>X</span><strong id="telemetry-x">000.0</strong><small>mm</small></div><div><span>Y</span><strong id="telemetry-y">000.0</strong><small>mm</small></div><div><span>Z</span><strong id="telemetry-z">120.0</strong><small>mm</small></div><div class="tip-meter"><span>TIP LIQUID</span><strong id="tip-volume">0 µL × 8</strong><i><b id="tip-fill"></b></i></div></div></article>
+        <article class="view-panel top-panel"><div class="panel-header"><div><span class="view-kicker">Engine simulation</span><h2>TOP-DOWN DECK</h2></div><div class="legend"><span class="source-key">Liquid</span><span class="destination-key">Dispensed</span><span class="collision-key">Finding</span></div></div><div class="canvas-wrap"><canvas id="top-canvas" aria-label="Top-down animated OT-2 deck"></canvas></div></article>
+        <article class="view-panel quarter-panel"><div class="panel-header"><div><span class="view-kicker">Engine simulation</span><h2>THREE-QUARTER VIEW</h2></div><div class="camera-badge">3D&nbsp; ◇</div></div><div class="canvas-wrap"><canvas id="quarter-canvas" aria-label="Three-quarter animated OT-2 rendering"></canvas></div><div class="telemetry"><div><span>X</span><strong id="telemetry-x">—</strong><small>mm</small></div><div><span>Y</span><strong id="telemetry-y">—</strong><small>mm</small></div><div><span>Z</span><strong id="telemetry-z">—</strong><small>mm</small></div><div class="tip-meter"><span>TIP LIQUID</span><strong id="tip-volume">—</strong><i><b id="tip-fill"></b></i></div></div></article>
+        <div id="sim-overlay" class="sim-overlay"><div><p class="eyebrow">WL Simulation</p><strong id="overlay-title">Upload a protocol to simulate</strong><small id="overlay-detail">The protocol runs on Opentrons' OT-2 engine. Motion, G-code, and safety checks come from that run.</small><button id="run-sample" class="secondary-button" type="button">Run sample protocol</button></div></div>
       </div>
-      <section class="transport"><button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button><button id="previous-button" class="icon-button" title="Previous action" aria-label="Previous action">│◀</button><button id="play-button" class="play-button" aria-label="Play simulation">▶</button><button id="next-button" class="icon-button" title="Next action" aria-label="Next action">▶│</button><div class="timeline-group"><div class="timeline-copy"><strong id="current-action">Pick up tips · column 1</strong><span><i id="cycle-label">Source 1/12 · Plate 1 · Dest. 1–4</i><b id="time-label">00:00 / ~00:00</b></span></div><input id="timeline" type="range" min="0" max="95" value="0" step="1" aria-label="Protocol action"></div><label class="speed-control">Speed<select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></section>
-      <footer class="run-status"><span><i class="green"></i><strong>Tip tracking</strong> Active</span><span><i class="cyan"></i><strong>Liquid tracking</strong> 130 µL initial</span><span><i class="green"></i><strong>Motion model</strong> Geometry-based estimate</span><span class="local-badge">Protocol stays local until submitted</span></footer>
+      <section class="gcode-console" aria-label="G-code sent to the motor controller">
+        <div class="console-header"><strong>G-code</strong><span id="gcode-status">Smoothie serial output</span><label class="console-toggle"><input id="gcode-polling" type="checkbox"> Show polling</label><label class="console-toggle"><input id="gcode-follow" type="checkbox" checked> Follow</label><button id="gcode-download" class="console-button" type="button" disabled>Download .gcode</button></div>
+        <div id="gcode-lines" class="console-body" role="log"></div>
+      </section>
+      <section class="transport"><button id="restart-button" class="icon-button" title="Restart" aria-label="Restart">↺</button><button id="previous-button" class="icon-button" title="Previous step" aria-label="Previous step">│◀</button><button id="play-button" class="play-button" aria-label="Play simulation">▶</button><button id="next-button" class="icon-button" title="Next step" aria-label="Next step">▶│</button><div class="timeline-group"><div class="timeline-copy"><strong id="current-action">No simulation loaded</strong><span><i id="cycle-label">—</i><b id="time-label">00:00 / ~00:00</b></span></div><input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Protocol step"></div><label class="speed-control">Speed<select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select></label></section>
+      <footer class="run-status"><span><i id="status-engine-dot" class="green"></i><strong>Engine</strong> <em id="status-engine">—</em></span><span><i id="status-safety-dot" class="cyan"></i><strong>Safety</strong> <em id="status-safety">Not run</em></span><span><i class="green"></i><strong>Motion</strong> Recorded from engine moves</span><span class="local-badge">Protocols are simulated on this server</span></footer>
     </section>
   </main>
   <div id="global-error" class="global-error" hidden></div>
   <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
-  <script src="app.js?v=7"></script>
+  <script src="simulator.js?v=4"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
