@@ -73,6 +73,7 @@ button { transition: border-color .18s ease, background .18s ease, transform .18
 .deck-slot.source { border-color: #bb298e; background: rgba(240,0,220,.1); }
 .deck-slot.tips { border-color: #8254a5; background: rgba(182,108,255,.1); }
 .deck-slot.trash { border-color: #555057; background: #0e0b10; }
+.deck-slot.reservoir { border-color: #4d6fc4; background: rgba(90,140,255,.1); }
 .deck-legend { display: flex; gap: 14px; margin-top: 10px; color: #a68fad; font-size: 8px; }
 .deck-legend span::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; }
 .source-key::before { background: var(--magenta) !important; }.destination-key::before { background: var(--cyan) !important; }.tip-key::before { background: var(--violet); }.empty-key::before { background: #655d68; }

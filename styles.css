@@ -90,6 +90,9 @@ button, label, input[type="range"], select { cursor: pointer; }
 .deck-slot.source { border-color: #886a2c; background: rgba(255,194,71,.09); }
 .deck-slot.tips { border-color: #68722a; background: rgba(215,230,74,.07); }
 .deck-slot.trash { color: #8999a0; border-color: #515d62; background: #070b0d; }
+.deck-slot.reservoir { border-color: #3a62b0; background: rgba(80,130,240,.1); }
+.reservoir-key::before { background: #5082f0; }
+.bom-card { min-height: 0; margin-top: 12px; }
 .mapping-scroll { max-height: 320px; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 10px; }
 th { position: sticky; top: 0; padding: 7px; color: #718b98; text-align: left; background: #0c1921; }

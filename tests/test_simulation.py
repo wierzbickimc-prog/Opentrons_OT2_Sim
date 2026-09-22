@@ -55,14 +55,33 @@ class EngineSimulationTests(unittest.TestCase):
         self.assertEqual(result["safety"]["status"], "pass")
         self.assertEqual(self.codes(result, "info"), {"air-aspirate-empty-well"})
 
-    def echo_dispensed(self, result):
-        echo = next(lw["id"] for lw in result["labware"] if lw["loadName"] == "labcyte_echo_384pp")
+    def test_generated_mfg_hybrid_protocol_tops_every_spot_to_10_ul(self):
+        result = simulate(FIXTURES / "mfg_hybrid_13_constructs.py")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["safety"]["status"], "pass")
+        self.assertEqual(self.codes(result, "info"), {"air-aspirate-empty-well"})
+        # One water tip column for the whole run, then one per source column.
+        pickups = [c for c in result["commands"] if c["type"] == "pickUpTip"]
+        self.assertEqual([c["params"]["wellName"] for c in pickups], ["A1", "A2", "A3"])
+        # Constructs 1-13 fill agar columns 1-4 (A-H) and 5-8 (A-E) with 10 uL
+        # spots. Rows F-H of the partial column get only water in spots 3 and 4.
+        spots = self.dispensed(result, "corning_96_wellplate_360ul_flat")
+        expected = {f"{row}{column}": 10 for row in "ABCDEFGH" for column in range(1, 5)}
+        expected.update({f"{row}{column}": 10 for row in "ABCDE" for column in range(5, 9)})
+        expected.update({f"{row}{column}": water for row in "FGH" for column, water in ((7, 7), (8, 9))})
+        self.assertEqual(spots, expected)
+
+    def dispensed(self, result, load_name):
+        labware = next(lw["id"] for lw in result["labware"] if lw["loadName"] == load_name)
         wells = {}
         for event in result["safety"]["liquid"]["events"]:
             for change in event["wells"]:
-                if change["labware"] == echo:
+                if change["labware"] == labware:
                     wells[change["well"]] = wells.get(change["well"], 0) + change["delta"]
         return wells
+
+    def echo_dispensed(self, result):
+        return self.dispensed(result, "labcyte_echo_384pp")
 
     def test_pcr_amp_sample_sheet_fills_the_mapped_echo_wells(self):
         result = simulate(FIXTURES / "pcr_amp_LAB2446.py")

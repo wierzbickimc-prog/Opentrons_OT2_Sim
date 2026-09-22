@@ -24,6 +24,7 @@
     <section class="landing-copy"><p class="eyebrow">Internal manufacturing tools</p><h2>OT-2 Manufacturing Tools</h2><p>Prepare, verify, and visualize manufacturing runs.</p></section>
     <section class="landing-options">
       <button id="open-mfg" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Plating</strong><small>Create a mapped work list and robot-ready protocol.</small></span><b>→</b></button>
+      <button id="open-hybrid" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Hybrid_Plating</strong><small>Spot 10, 10, 3 and 1 µL of each construct, with water topping the last two up to 10 µL.</small></span><b>→</b></button>
       <button id="open-amp" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>PCR-&gt;AMP plate transfer</strong><small>Rearray 96-well PCR plates into a 384-well Echo plate from a PCR plan CSV.</small></span><b>→</b></button>
       <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Run a protocol on the OT-2 engine: motion, G-code, and safety checks.</small></span><b>→</b></button>
     </section>
@@ -32,9 +33,9 @@
   <main id="mfg-screen" class="mfg-screen view-screen" hidden>
     <section class="mfg-form-panel">
       <button class="back-button" data-route="landing">← All tools</button>
-      <p class="eyebrow">New work list</p><h2>MFG_Plating</h2>
+      <p class="eyebrow">New work list</p><h2 id="mfg-title">MFG_Plating</h2>
       <div class="stepper" aria-label="Work-list steps"><span class="active"><b>1</b> Run details</span><i></i><span><b>2</b> Deck setup</span><i></i><span><b>3</b> Generate</span></div>
-      <p class="form-intro">Generate four 10 µL destination replicates from each construct using a P20 eight-channel GEN2.</p>
+      <p id="mfg-intro" class="form-intro">Generate four 10 µL destination replicates from each construct using a P20 eight-channel GEN2.</p>
       <form id="worklist-form">
         <label class="field-label" for="worklist-id">Unique identifier</label>
         <input id="worklist-id" class="text-field" type="text" maxlength="80" required placeholder="e.g. MFG-2026-00421">
@@ -53,9 +54,10 @@
         <div><strong id="required-sources">1</strong><span>source plate</span></div><div><strong id="required-tips">1</strong><span>tip rack</span></div><div><strong id="required-destinations">4</strong><span>destination plates</span></div><div><strong id="required-actions">96</strong><span>robot actions</span></div>
       </div>
       <div class="setup-grid">
-        <article class="setup-card"><div class="setup-title"><h3>OT-2 deck layout</h3><span>Top-down · front ↓</span></div><div id="work-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div><div class="deck-legend"><span class="destination-key">Destination</span><span class="source-key">Source</span><span class="tip-key">Tip rack</span><span class="empty-key">Empty</span></div></article>
+        <article class="setup-card"><div class="setup-title"><h3>OT-2 deck layout</h3><span>Top-down · front ↓</span></div><div id="work-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div><div class="deck-legend"><span class="destination-key">Destination</span><span class="source-key">Source</span><span class="tip-key">Tip rack</span><span id="reservoir-key" class="reservoir-key" hidden>Reservoir</span><span class="empty-key">Empty</span></div></article>
         <article class="setup-card mapping-card"><div class="setup-title"><h3>Source mapping</h3><span id="mapping-summary">Column-major order</span></div><div class="mapping-scroll"><table><thead><tr><th>Constructs</th><th>Source</th><th>Destination</th></tr></thead><tbody id="mapping-body"></tbody></table></div></article>
       </div>
+      <article class="setup-card bom-card"><div class="setup-title"><h3>Bill of materials</h3><span>Load before confirming</span></div><table><thead><tr><th>Item</th><th>Qty</th><th>Location</th><th>Notes</th></tr></thead><tbody id="bom-body"></tbody></table></article>
       <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="machine-ready" class="ready-button" disabled><span>▷</span> Machine is ready</button></div>
       <section id="delivery-panel" class="delivery-panel" hidden>
         <div class="delivery-actions"><button id="download-protocol" class="primary-button">Download Python protocol</button><button id="simulate-worklist" class="secondary-button">Open in WL Simulation</button></div>

@@ -7,17 +7,34 @@ const topCtx = topCanvas.getContext("2d");
 const quarterCtx = quarterCanvas.getContext("2d");
 const GCODE_WINDOW_LINES = 160;
 
-function createWorkflow(constructCount, identifier) {
+const MFG_MODES = {
+  plating: {
+    title: "MFG_Plating",
+    intro: "Generate four 10 µL destination replicates from each construct using a P20 eight-channel GEN2."
+  },
+  hybrid: {
+    title: "MFG_Hybrid_Plating",
+    intro: "Spot 10 µL, 10 µL, 3 µL and 1 µL of each construct using a P20 eight-channel GEN2. Water goes down first, 7 µL and 9 µL under spots 3 and 4, so every spot ends at 10 µL (100%, 100%, 30%, 10% culture)."
+  }
+};
+
+function createWorkflow(constructCount, identifier, mode = "plating") {
   const count = Math.max(1, Math.min(144, Number(constructCount) || 1));
+  const hybrid = mode === "hybrid";
   const sourceColumns = Math.ceil(count / 8);
   const sourcePlateCount = Math.ceil(count / 96);
   const destinationPlateCount = Math.ceil(count / 24);
+  // One tip column per source column; hybrid adds one column that lays down all the water.
+  const tipColumns = sourceColumns + (hybrid ? 1 : 0);
   return {
-    identifier: identifier || "MFG_Plating",
+    mode,
+    identifier: identifier || MFG_MODES[mode].title,
     constructCount: count,
     sourceColumns,
+    tipColumns,
     sourceSlots: [7, 8].slice(0, sourcePlateCount),
-    tipSlots: [10, 11].slice(0, sourcePlateCount),
+    tipSlots: [10, 11].slice(0, Math.ceil(tipColumns / 12)),
+    reservoirSlot: hybrid ? 9 : null,
     destinationSlots: Array.from({ length: destinationPlateCount }, (_item, index) => index + 1)
   };
 }
@@ -352,17 +369,19 @@ function animate(time) {
 
 function routeTo(route) {
   $("#landing-screen").hidden = route !== "landing";
-  $("#mfg-screen").hidden = route !== "mfg";
+  $("#mfg-screen").hidden = route !== "mfg" && route !== "hybrid";
   $("#amp-screen").hidden = route !== "amp";
   $("#simulator-screen").hidden = route !== "simulator";
   const labels = {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
+    hybrid: ["MFG_Hybrid_Plating", "Diluted spots with water added first"],
     amp: ["PCR->AMP plate transfer", "96-well PCR plates into a 384-well Echo plate"],
     simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"]
   };
   $("#app-title").textContent = labels[route][0];
   $("#app-subtitle").textContent = labels[route][1];
+  if (route === "mfg" || route === "hybrid") setMfgMode(route === "hybrid" ? "hybrid" : "plating");
   if (route === "simulator") { state.dirty = true; window.setTimeout(draw, 0); }
 }
 
@@ -392,8 +411,31 @@ function deckItemFor(workflow, slot) {
   if (destination >= 0) return { type: "destination", label: `Destination ${destination + 1}`, detail: "Agar plate" };
   if (source >= 0) return { type: "source", label: `Source ${source + 1}`, detail: "PCR plate" };
   if (tips >= 0) return { type: "tips", label: `Tip rack ${tips + 1}`, detail: "20 µL tips" };
+  if (slot === workflow.reservoirSlot) return { type: "reservoir", label: "Water reservoir", detail: "NEST 195 mL · fill to line" };
   if (slot === 12) return { type: "trash", label: "Fixed trash", detail: "Built in" };
   return { type: "empty", label: "Empty", detail: "" };
+}
+
+function slotList(slots) {
+  if (slots.length === 1) return `Slot ${slots[0]}`;
+  const contiguous = slots.every((slot, index) => index === 0 || slot === slots[index - 1] + 1);
+  return contiguous ? `Slots ${slots[0]}–${slots[slots.length - 1]}` : `Slots ${slots.join(", ")}`;
+}
+
+function billOfMaterials(workflow) {
+  const tipNote = workflow.mode === "hybrid"
+    ? `${workflow.tipColumns} tip columns: 1 for all water, ${workflow.sourceColumns} for culture`
+    : `${workflow.tipColumns} tip columns, one per source column`;
+  const items = [
+    ["P20 8-Channel GEN2 pipette", 1, "Left mount", ""],
+    ["Opentrons 96 Tip Rack 20 µL", workflow.tipSlots.length, slotList(workflow.tipSlots), tipNote],
+    ["Opentrons 96-well PCR plate, 200 µL full skirt", workflow.sourceSlots.length, slotList(workflow.sourceSlots), "Culture, 130 µL per occupied well"],
+    ["Agar plate (Corning 96-well flat footprint)", workflow.destinationSlots.length, slotList(workflow.destinationSlots), ""]
+  ];
+  if (workflow.reservoirSlot) {
+    items.push(["NEST 1-Well Reservoir 195 mL", 1, `Slot ${workflow.reservoirSlot}`, `Water, filled to the line (run uses ${(workflow.sourceColumns * 8 * 16 / 1000).toFixed(1)} mL)`]);
+  }
+  return items;
 }
 
 function renderWorklist(workflow) {
@@ -402,7 +444,11 @@ function renderWorklist(workflow) {
   $("#required-tips").textContent = workflow.tipSlots.length;
   $("#required-destinations").textContent = workflow.destinationSlots.length;
   $("#required-actions").textContent = workflow.sourceColumns * 8;
-  $("#mapping-summary").textContent = `${workflow.constructCount} constructs · ${workflow.sourceColumns} source columns`;
+  $("#mapping-summary").textContent = `${workflow.constructCount} constructs · ${workflow.sourceColumns} source columns`
+    + (workflow.mode === "hybrid" ? " · spots 10 / 10 / 3+7 / 1+9 µL" : "");
+  $("#reservoir-key").hidden = !workflow.reservoirSlot;
+  $("#bom-body").innerHTML = billOfMaterials(workflow)
+    .map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtml(String(cell))}</td>`).join("")}</tr>`).join("");
   const deckOrder = [10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3];
   $("#work-deck").innerHTML = deckOrder.map((slot) => {
     const item = deckItemFor(workflow, slot);
@@ -423,6 +469,111 @@ function renderWorklist(workflow) {
 function pythonString(value) { return JSON.stringify(String(value)); }
 
 function generateProtocol(workflow) {
+  return workflow.mode === "hybrid" ? generateHybridProtocol(workflow) : generatePlatingProtocol(workflow);
+}
+
+function generateHybridProtocol(workflow) {
+  return `from opentrons import protocol_api
+
+metadata = {
+    "protocolName": ${pythonString(`MFG_Hybrid_Plating - ${workflow.identifier}`)},
+    "author": "OT-2 Manufacturing Tools",
+    "description": "10, 10, 3 + 7 water and 1 + 9 water uL spots for ${workflow.constructCount} constructs",
+    "worklistId": ${pythonString(workflow.identifier)},
+}
+
+requirements = {"robotType": "OT-2", "apiLevel": "2.28"}
+
+WORKLIST_ID = ${pythonString(workflow.identifier)}
+CONSTRUCT_COUNT = ${workflow.constructCount}
+STARTING_VOLUME = 130
+SOURCE_SLOTS = ${JSON.stringify(workflow.sourceSlots)}
+TIP_SLOTS = ${JSON.stringify(workflow.tipSlots)}
+DESTINATION_SLOTS = ${JSON.stringify(workflow.destinationSlots)}
+RESERVOIR_SLOT = ${workflow.reservoirSlot}
+# The operator fills the reservoir to its line; this volume only drives liquid tracking.
+RESERVOIR_VOLUME = 100000
+# Water under spots 3 and 4, drawn with a little extra that is blown back into the reservoir.
+WATER_SPOT_3 = 7
+WATER_SPOT_4 = 9
+WATER_OVERDRAW = 2
+# Culture for spots 3 and 4 goes into the water drop, this far above the agar, with no blow-out.
+SPOT_HEIGHT_MM = 1
+
+
+def run(protocol: protocol_api.ProtocolContext):
+    source_plates = [
+        protocol.load_labware("opentrons_96_wellplate_200ul_pcr_full_skirt", slot)
+        for slot in SOURCE_SLOTS
+    ]
+    destination_plates = [
+        protocol.load_labware("corning_96_wellplate_360ul_flat", slot)
+        for slot in DESTINATION_SLOTS
+    ]
+    tip_racks = [
+        protocol.load_labware("opentrons_96_tiprack_20ul", slot)
+        for slot in TIP_SLOTS
+    ]
+    reservoir = protocol.load_labware("nest_1_reservoir_195ml", RESERVOIR_SLOT)
+    p20_multi = protocol.load_instrument("p20_multi_gen2", "left", tip_racks=tip_racks)
+
+    culture = protocol.define_liquid(
+        name="E. coli culture", description=WORKLIST_ID, display_color="#F000DC"
+    )
+    water = protocol.define_liquid(
+        name="Water", description="Fill to the reservoir line", display_color="#41D8F2"
+    )
+    # wells() follows column-major order: A1-H1, then A2-H2.
+    for construct_index in range(CONSTRUCT_COUNT):
+        plate_index = construct_index // 96
+        local_well_index = construct_index % 96
+        source_plates[plate_index].wells()[local_well_index].load_liquid(
+            liquid=culture, volume=STARTING_VOLUME
+        )
+    reservoir["A1"].load_liquid(liquid=water, volume=RESERVOIR_VOLUME)
+
+    source_column_count = (CONSTRUCT_COUNT + 7) // 8
+
+    def spots(global_source_column):
+        destination_plate_index = global_source_column // 3
+        first_destination_column = (global_source_column % 3) * 4
+        destination_columns = destination_plates[destination_plate_index].columns()[
+            first_destination_column:first_destination_column + 4
+        ]
+        return [column[0] for column in destination_columns]
+
+    # All water first. These tips only touch the reservoir and clean agar, so
+    # one set serves every column.
+    p20_multi.pick_up_tip()
+    for global_source_column in range(source_column_count):
+        targets = spots(global_source_column)
+        p20_multi.aspirate(WATER_SPOT_3 + WATER_SPOT_4 + WATER_OVERDRAW, reservoir["A1"])
+        p20_multi.dispense(WATER_SPOT_3, targets[2].bottom(SPOT_HEIGHT_MM))
+        p20_multi.dispense(WATER_SPOT_4, targets[3].bottom(SPOT_HEIGHT_MM))
+        p20_multi.blow_out(reservoir["A1"].top())
+    p20_multi.drop_tip()
+
+    # Culture follows the water's column order, so the oldest drops are filled first.
+    for global_source_column in range(source_column_count):
+        source_plate_index = global_source_column // 12
+        local_source_column = global_source_column % 12
+        source_well = source_plates[source_plate_index].columns()[local_source_column][0]
+        targets = spots(global_source_column)
+
+        # A partial final column intentionally uses all eight tips. Channels
+        # aligned with unoccupied source wells will aspirate air.
+        p20_multi.pick_up_tip()
+        p20_multi.aspirate(20, source_well)
+        p20_multi.dispense(10, targets[0])
+        p20_multi.dispense(10, targets[1])
+        p20_multi.aspirate(4, source_well)
+        p20_multi.dispense(3, targets[2].bottom(SPOT_HEIGHT_MM))
+        p20_multi.dispense(1, targets[3].bottom(SPOT_HEIGHT_MM))
+        p20_multi.drop_tip()
+`;
+}
+
+function generatePlatingProtocol(workflow) {
   const sourceSlots = JSON.stringify(workflow.sourceSlots);
   const tipSlots = JSON.stringify(workflow.tipSlots);
   const destinationSlots = JSON.stringify(workflow.destinationSlots);
@@ -567,6 +718,27 @@ $("#run-simulation").addEventListener("click", () => { if (state.pending) runSim
 $("#run-sample").addEventListener("click", () => runSimulation({ sample: true, filename: "sample_protocol.py" }));
 
 let draftWorkflow = null;
+let mfgMode = "plating";
+
+// MFG_Plating and MFG_Hybrid_Plating share one screen; switching clears the other mode's setup.
+function setMfgMode(mode) {
+  if (mode === mfgMode) return;
+  mfgMode = mode;
+  $("#mfg-title").textContent = MFG_MODES[mode].title;
+  $("#mfg-intro").textContent = MFG_MODES[mode].intro;
+  draftWorkflow = null;
+  state.generatedProtocol = "";
+  $("#machine-ready").disabled = true;
+  $("#delivery-panel").hidden = true;
+  $("#worklist-state").textContent = "Draft";
+  $("#worklist-state").classList.remove("ready");
+  $("#output-title").textContent = "Enter work-list details";
+  $("#work-deck").innerHTML = "";
+  $("#mapping-body").innerHTML = "";
+  $("#bom-body").innerHTML = "";
+  $("#reservoir-key").hidden = true;
+  $("#mfg-status").hidden = true;
+}
 
 function invalidateWorklist() {
   if (!draftWorkflow) return;
@@ -580,6 +752,7 @@ function invalidateWorklist() {
 }
 
 $("#open-mfg").addEventListener("click", () => routeTo("mfg"));
+$("#open-hybrid").addEventListener("click", () => routeTo("hybrid"));
 $("#open-simulator").addEventListener("click", () => routeTo("simulator"));
 $("#home-button").addEventListener("click", () => routeTo("landing"));
 document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => routeTo(button.dataset.route)));
@@ -592,7 +765,7 @@ $("#worklist-form").addEventListener("submit", (event) => {
   const count = Number($("#construct-count").value);
   if (!identifier) { showMfgStatus("Enter a unique identifier.", true); return; }
   if (!Number.isInteger(count) || count < 1 || count > 144) { showMfgStatus("Construct count must be a whole number from 1 through 144.", true); return; }
-  draftWorkflow = createWorkflow(count, identifier);
+  draftWorkflow = createWorkflow(count, identifier, mfgMode);
   renderWorklist(draftWorkflow);
   $("#machine-ready").disabled = false;
   $("#delivery-panel").hidden = true;

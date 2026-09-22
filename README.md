@@ -1,6 +1,6 @@
 # OT-2 Protocol Visualizer
 
-A browser-based manufacturing tool for creating 1–144 construct plating work lists, PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ OT2_SITE_PASSWORD='your-password' python3 server.py
 
 `OT2_SITE_PASSWORD` gates the whole app: every page, asset, and API redirects to a sign-in page until the password is entered. Sessions last 12 hours, are signed with a per-process secret (restarting the server signs everyone out), and five wrong attempts from one address lock sign-in for five minutes. Leave the variable unset to disable the gate. Keep the password out of the repository: set it in the environment or in `~/.config/ot2-visualizer.env` on the host.
 
-Open <http://localhost:8766>. Choose **MFG_Plating** or **PCR->AMP plate transfer** to create a work list, or **WL Simulation** to review a protocol.
+Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, or **WL Simulation** to review a protocol.
 
 After updating files while the server is already running, reload the page with the browser's cache bypass shortcut (`Cmd+Shift+R` on macOS or `Ctrl+Shift+R` on Linux/Windows).
 
@@ -26,6 +26,17 @@ OT2_VISUALIZER_HOST=0.0.0.0 python3 server.py
 Then visit `http://HOST_IP:8766` from another machine on the internal network. Use an authenticated reverse proxy before exposing it outside a trusted network.
 
 For a persistent per-user service, copy `deploy/ot2-visualizer.service` to `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, and enable it with `systemctl --user enable --now ot2-visualizer.service`.
+
+## MFG_Hybrid_Plating
+
+Same inputs, mapping, and deck as MFG_Plating, but the four spots per construct are 10 µL, 10 µL, 3 µL + 7 µL water, and 1 µL + 9 µL water, so every spot ends at 10 µL (100%, 100%, 30%, 10% culture).
+
+- **Water first.** One tip column lays down all the water: each source column is one 18 µL aspirate from the reservoir, 7 µL into spot 3 and 9 µL into spot 4, and the 2 µL overdraw is blown back into the reservoir. These tips only touch the reservoir and clean agar, so they are used for the whole run.
+- **Then culture**, in the same column order, with a fresh tip per source column: 20 µL → 10, 10; then 4 µL → 3, 1 dispensed into the water drops 1 mm above the agar with no blow-out.
+- **Tips:** source columns + 1, so ceil((columns + 1) / 12) racks in slots 10–11 (89–96 constructs now need two racks).
+- **Water:** NEST 1-Well Reservoir 195 mL in slot 9, filled to the line. The protocol models 100 mL for liquid tracking; a full run uses 2.3 mL.
+
+On the engine, 144 constructs take about 10 minutes (MFG_Plating: about 8), and water drops wait 3.4–6.8 minutes for their culture.
 
 ## PCR->AMP plate transfer
 
