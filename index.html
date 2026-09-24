@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#1a0b20">
   <title>OT-2 Manufacturing Tools</title>
   <script>if (!/\/$|\.html$/.test(location.pathname)) location.replace(location.pathname + "/" + location.search);</script>
-  <link rel="stylesheet" href="styles.css?v=9">
-  <link rel="stylesheet" href="brand.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=10">
+  <link rel="stylesheet" href="brand.css?v=4">
 </head>
 <body>
   <header class="app-header">
@@ -27,6 +27,7 @@
       <button id="open-hybrid" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Hybrid_Plating</strong><small>Spot 10, 10, 3 and 1 µL of each construct, with water topping the last two up to 10 µL.</small></span><b>→</b></button>
       <button id="open-amp" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>PCR-&gt;AMP plate transfer</strong><small>Rearray 96-well PCR plates into a 384-well Echo plate from a PCR plan CSV.</small></span><b>→</b></button>
       <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Run a protocol on the OT-2 engine: motion, G-code, and safety checks.</small></span><b>→</b></button>
+      <button id="open-calibration" class="landing-card"><span class="card-icon target-icon" aria-hidden="true"><i></i></span><span><strong>Equipment calibration</strong><small>Deck, tip length, and pipette offset calibration and the Calibration Health Check, as in the OT-2 App.</small></span><b>→</b></button>
     </section>
   </main>
 
@@ -145,9 +146,63 @@
       <footer class="run-status"><span><i id="status-engine-dot" class="green"></i><strong>Engine</strong> <em id="status-engine">—</em></span><span><i id="status-safety-dot" class="cyan"></i><strong>Safety</strong> <em id="status-safety">Not run</em></span><span><i class="green"></i><strong>Motion</strong> Recorded from engine moves</span><span class="local-badge">Protocols are simulated on this server</span></footer>
     </section>
   </main>
+  <main id="cal-screen" class="mfg-screen cal-screen view-screen" hidden>
+    <section class="mfg-form-panel cal-panel">
+      <button class="back-button" data-route="landing">← All tools</button>
+      <p class="eyebrow">Equipment calibration</p><h2>OT-2 calibration</h2>
+      <p class="form-intro">The OT-2 App's robot calibration flows. Practice mode runs them on a simulated OT-2 whose deck, mounts, and tips are off by hidden amounts, so the calibrations you save are measured from your jogging. Nothing is sent to a robot.</p>
+      <p class="eyebrow cal-subhead">Practice robot</p>
+      <label class="field-label" for="cal-left-pipette">Left mount</label>
+      <select id="cal-left-pipette" class="text-field" data-mount="left"></select>
+      <label class="field-label" for="cal-right-pipette">Right mount</label>
+      <select id="cal-right-pipette" class="text-field" data-mount="right"></select>
+      <small class="field-help">Swapping a pipette clears its tip length and pipette offset, as on the robot.</small>
+      <p class="eyebrow cal-subhead">Calibrations</p>
+      <div id="cal-status" class="cal-status"></div>
+      <label class="cal-toggle"><input id="cal-show-offsets" type="checkbox"> Show exact offsets (training aid)</label>
+      <button id="cal-new-robot" class="secondary-button cal-wide" type="button">New practice robot</button>
+      <div id="cal-notice" class="notice" hidden></div>
+    </section>
+    <section class="cal-workspace">
+      <div class="output-heading"><div><p id="cal-flow-kicker" class="eyebrow">Practice mode · simulated OT-2</p><h2 id="cal-flow-title">Choose a calibration</h2></div><div class="cal-heading-actions"><span id="cal-step-chip" class="state-chip">Idle</span><button id="cal-exit" class="secondary-button" type="button" hidden>Exit</button></div></div>
+      <ol id="cal-progress" class="cal-progress"></ol>
+      <div class="cal-views">
+        <article class="view-panel"><div class="panel-header"><div><span class="view-kicker">Practice robot</span><h2>TOP-DOWN DECK</h2></div><div class="legend"><span class="tip-key">Tip rack</span><span class="cal-block-key">Calibration Block</span><span class="cal-target-key">Target</span></div></div><div class="canvas-wrap"><canvas id="cal-deck-canvas" aria-label="Top-down OT-2 deck with the pipette position"></canvas></div></article>
+        <article class="view-panel"><div class="panel-header"><div><span class="view-kicker">What you would see at the robot</span><h2>ALIGNMENT CLOSE-UP</h2></div><div id="cal-target-label" class="camera-badge">—</div></div><div class="canvas-wrap"><canvas id="cal-closeup-canvas" aria-label="Close-up of the pipette and its alignment target"></canvas><div id="cal-aid" class="cal-aid" hidden></div><div class="telemetry"><div><span>X</span><strong id="cal-pos-x">—</strong><small>mm</small></div><div><span>Y</span><strong id="cal-pos-y">—</strong><small>mm</small></div><div><span>Z</span><strong id="cal-pos-z">—</strong><small>mm</small></div></div></div></article>
+        <div id="cal-empty" class="sim-overlay"><div><p class="eyebrow">Recommended order</p><strong>Deck → tip length and pipette offset → health check</strong><small>Choose a calibration on the left. Every setup step and question from the OT-2 App appears as a pop-up; jog with the pad or the keyboard.</small></div></div>
+      </div>
+      <div class="cal-controls">
+        <article class="cal-instruction">
+          <p id="cal-step-kicker" class="eyebrow">—</p>
+          <h3 id="cal-step-title">No calibration running</h3>
+          <p id="cal-step-body" class="cal-step-body"></p>
+          <div id="cal-step-actions" class="cal-step-actions"></div>
+          <button id="cal-crash" class="link-button" type="button" hidden>Jog too far or bend a tip?</button>
+        </article>
+        <article class="jog-pad" aria-label="Jog controls">
+          <div class="jog-groups">
+            <div class="jog-xy"><span></span><button type="button" data-jog="y" data-dir="1" title="Back (↑)">↑</button><span></span><button type="button" data-jog="x" data-dir="-1" title="Left (←)">←</button><b>X·Y</b><button type="button" data-jog="x" data-dir="1" title="Right (→)">→</button><span></span><button type="button" data-jog="y" data-dir="-1" title="Front (↓)">↓</button><span></span></div>
+            <div class="jog-z"><button type="button" data-jog="z" data-dir="1" title="Up (Shift+↑ or W)">↑</button><b>Z</b><button type="button" data-jog="z" data-dir="-1" title="Down (Shift+↓ or S)">↓</button></div>
+          </div>
+          <div class="jog-steps" role="radiogroup" aria-label="Jog step size"><button type="button" data-step="0.1">0.1 mm</button><button type="button" data-step="1" class="active">1 mm</button><button type="button" data-step="10">10 mm</button></div>
+          <small class="jog-help">Keys: ←→ X · ↑↓ Y (↑ is back) · Shift+↑↓ or W/S Z · 1/2/3 step size</small>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="prompt-dialog" class="prompt-dialog" aria-labelledby="prompt-title">
+    <p id="prompt-eyebrow" class="eyebrow"></p>
+    <h2 id="prompt-title"></h2>
+    <div id="prompt-body" class="prompt-body"></div>
+    <ul id="prompt-checklist" class="prompt-checklist" hidden></ul>
+    <div id="prompt-actions" class="prompt-actions"></div>
+  </dialog>
   <div id="global-error" class="global-error" hidden></div>
   <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
   <script src="simulator.js?v=4"></script>
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
+  <script src="calibration_flows.js?v=1"></script>
+  <script src="calibration.js?v=1"></script>
 </body>
 </html>

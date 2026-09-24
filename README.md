@@ -1,6 +1,6 @@
 # OT-2 Protocol Visualizer
 
-A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration walks operators through the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check on a practice robot.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ OT2_SITE_PASSWORD='your-password' python3 server.py
 
 `OT2_SITE_PASSWORD` gates the whole app: every page, asset, and API redirects to a sign-in page until the password is entered. Sessions last 12 hours, are signed with a per-process secret (restarting the server signs everyone out), and five wrong attempts from one address lock sign-in for five minutes. Leave the variable unset to disable the gate. Keep the password out of the repository: set it in the environment or in `~/.config/ot2-visualizer.env` on the host.
 
-Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, or **WL Simulation** to review a protocol.
+Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, **WL Simulation** to review a protocol, or **Equipment calibration** to practice robot calibration.
 
 After updating files while the server is already running, reload the page with the browser's cache bypass shortcut (`Cmd+Shift+R` on macOS or `Ctrl+Shift+R` on Linux/Windows).
 
@@ -66,6 +66,8 @@ Uploading a protocol (or choosing **Open in WL Simulation** from MFG_Plating) se
 
 The browser then plays back the recorded moves (including arc heights the engine chooses), shows the G-code in the console below the animation in step with playback, and lists safety findings; clicking a finding jumps to its step. **Download .gcode** saves the full capture, annotated by command.
 
+Playback stops at every `protocol.pause()` and shows its message in a pop-up, as the robot waits for **Resume** in the OT-2 App. **Resume** continues; **Stay paused** leaves playback stopped on that step.
+
 ### Safety checks
 
 | Severity | Check |
@@ -92,7 +94,24 @@ Simulation executes uploaded Python on the server. It is open to anyone who can 
 python3 -m unittest discover tests
 ```
 
-`tests/test_simulation.py` runs the sample protocol and the fixtures in `tests/fixtures/` on the real engine and is skipped when `.venv-sim` is missing. Each fixture is a deliberately faulty protocol that must produce its finding.
+`tests/test_calibration.py` runs `tests/calibration_flows.test.js` in Node (skipped when Node is missing): every flow with an exact operator, the App's flow order, a pipette offset saved 3 mm off failing the health check, pick-up misses, and crashes. `tests/test_simulation.py` runs the sample protocol and the fixtures in `tests/fixtures/` on the real engine and is skipped when `.venv-sim` is missing. Each fixture is a deliberately faulty protocol that must produce its finding.
+
+## Equipment calibration
+
+The OT-2's robot calibration is not a protocol. It is four interactive flows in Opentrons' robot server (`robot_server/robot/calibration`), which the OT-2 App drives command by command while the operator jogs the pipette and the robot saves what it measures. This tool rebuilds them: `calibration_flows.js` has robot-server's state machines, command names, positions, and health-check tolerances, and `calibration.js` is the screen.
+
+| Flow | Operator jogs to | Saves |
+| --- | --- | --- |
+| Deck calibration | Tip in slot 8 A1, deck in slot 5, crosses in slots 1, 3, 7 | Deck offset; clears every pipette offset |
+| Tip length | Nozzle, then tip, onto the Calibration Block (slot 3 for the left mount, slot 1 for the right) or the fixed trash | Tip length; clears that pipette's offset |
+| Pipette offset | Deck in slot 5, cross in slot 1 (measures tip length first when there is none) | Pipette offset |
+| Calibration Health Check | Every point above, per pipette (block in slot 6) | Pass or fail per calibration, using Opentrons' tolerances (for example P20 crosses 1.4 mm, P300 1.8 mm per axis) |
+
+Every question the OT-2 App asks appears as a pop-up: Calibration Block or trash bin, the deck setup checklist (clear all other deck slots, tip rack in slot 8, block placement) that must be ticked before **Confirm placement**, "Did pipette pick up tip successfully?", removing the Calibration Block, returning the tip, the health-check results, and "Jog too far or bend a tip?" (also raised automatically when the pipette is jogged more than 1.5 mm into a surface). Jog with the on-screen pad or the keyboard: arrows for X and Y (↑ is toward the back), Shift+↑/↓ or W/S for Z, and 1/2/3 for 0.1, 1, or 10 mm steps.
+
+**Practice mode** is the only mode so far. It runs on a simulated OT-2 whose deck, mounts, and tips are off by hidden amounts; the close-up shows what an operator would see at the robot (a top-down view of the target and a side view of the gap), and calibrations are measured from where you jog, so a sloppy calibration fails the health check. **Show exact offsets** adds a numeric training aid. Nothing is sent to a robot, and practice calibrations reset when the page reloads. The flows use robot-server's command names so a later live mode can send the same commands to an OT-2's `/sessions` API.
+
+Practice limits: the deck model is a translation per pipette (no rotation), tip pick-up succeeds within 1.2 mm of A1, and moves go straight to each target without the robot's arcs.
 
 ## Prototype scope
 

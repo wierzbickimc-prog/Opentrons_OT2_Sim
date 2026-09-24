@@ -48,6 +48,8 @@ const state = {
   lastTime: 0,
   dirty: true,
   renderedStep: -1,
+  // Last step reached by playback; pauses after it stop playback with a pop-up.
+  playedStep: -1,
   gcodeKey: "",
   pending: null,
   running: false,
@@ -94,6 +96,53 @@ function formatDuration(seconds) {
   const remainder = rounded % 60;
   return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
+
+// ------------------------------------------------------------ operator pop-ups
+
+let promptSettle = null;
+let promptCancel = null;
+
+// Modal operator prompt; resolves with the chosen action's value. `body` is trusted HTML.
+// Actions with needsChecklist stay disabled until every checklist item is ticked.
+// Escape resolves with `cancel`, or does nothing when cancel is null.
+function showPrompt({ eyebrow = "", title, body = "", checklist = [], actions, cancel = null, tone = "", onOpen = null }) {
+  const dialog = $("#prompt-dialog");
+  if (promptSettle) promptSettle(promptCancel);
+  dialog.dataset.tone = tone;
+  $("#prompt-eyebrow").textContent = eyebrow;
+  $("#prompt-eyebrow").hidden = !eyebrow;
+  $("#prompt-title").textContent = title;
+  $("#prompt-body").innerHTML = body;
+  $("#prompt-checklist").innerHTML = checklist.map((item, i) => `<li><label><input type="checkbox" data-check="${i}"><span><strong>${escapeHtml(item.label)}</strong>${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ""}</span></label></li>`).join("");
+  $("#prompt-checklist").hidden = !checklist.length;
+  $("#prompt-actions").innerHTML = actions.map((action, i) => `<button type="button" class="${action.kind === "primary" ? "primary-button" : action.kind === "danger" ? "danger-button" : "secondary-button"}" data-action="${i}"${action.needsChecklist && checklist.length ? " disabled" : ""}>${escapeHtml(action.label)}</button>`).join("");
+  const syncChecklist = () => {
+    const done = [...dialog.querySelectorAll("[data-check]")].every((box) => box.checked);
+    actions.forEach((action, i) => { if (action.needsChecklist) dialog.querySelector(`[data-action="${i}"]`).disabled = !done; });
+  };
+  $("#prompt-checklist").onchange = syncChecklist;
+  return new Promise((resolve) => {
+    promptCancel = cancel;
+    promptSettle = (value) => {
+      promptSettle = null;
+      if (dialog.open) dialog.close();
+      resolve(value);
+    };
+    $("#prompt-actions").onclick = (event) => {
+      const button = event.target.closest("[data-action]");
+      if (button && !button.disabled && promptSettle) promptSettle(actions[Number(button.dataset.action)].value);
+    };
+    dialog.showModal();
+    if (onOpen) onOpen(dialog);
+    const primary = dialog.querySelector(".primary-button:not(:disabled)");
+    if (primary) primary.focus();
+  });
+}
+
+$("#prompt-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  if (promptSettle && promptCancel !== null) promptSettle(promptCancel);
+});
 
 
 // ------------------------------------------------------------ simulation run
@@ -180,6 +229,7 @@ function loadResult(result, filename) {
   state.time = 0;
   state.playing = false;
   state.renderedStep = -1;
+  state.playedStep = -1;
   state.gcodeKey = "";
   state.dirty = true;
 
@@ -241,8 +291,33 @@ function setStep(index) {
   if (!state.model) return;
   const clamped = Math.max(0, Math.min(state.model.steps.length - 1, index));
   state.time = state.model.steps[clamped].start;
+  state.playedStep = clamped;
   state.dirty = true;
   updateUI();
+}
+
+// The first protocol pause (protocol.pause) after step `from`, up to step `to`.
+function pauseStepBetween(model, from, to) {
+  for (let i = from + 1; i <= to; i += 1) if (model.steps[i].command.type === "waitForResume") return i;
+  return -1;
+}
+
+// On a robot the run waits at a pause until someone resumes it in the OT-2 App; playback does the same.
+async function promptProtocolPause(index) {
+  const step = state.model.steps[index];
+  const message = step.command.params.message;
+  const choice = await showPrompt({
+    eyebrow: `Step ${index + 1} · Protocol paused`,
+    title: message || "The protocol is paused",
+    body: "<p>On the robot, the run waits here until someone selects <strong>Resume</strong> in the OT-2 App. Complete the step above before resuming.</p>",
+    actions: [{ label: "Stay paused", value: "stay" }, { label: "Resume", value: "resume", kind: "primary" }],
+    cancel: "stay"
+  });
+  if (choice === "resume" && state.model && state.model.steps[index] === step) {
+    state.playing = true;
+    state.dirty = true;
+    updateUI();
+  }
 }
 
 function updateUI() {
@@ -357,6 +432,15 @@ function animate(time) {
         state.time = state.model.totalSeconds;
         state.playing = false;
       }
+      const reached = currentStepIndex();
+      const pause = pauseStepBetween(state.model, state.playedStep, reached);
+      state.playedStep = reached;
+      if (pause >= 0) {
+        state.time = state.model.steps[pause].start;
+        state.playedStep = pause;
+        state.playing = false;
+        promptProtocolPause(pause);
+      }
       state.dirty = true;
       updateUI();
     }
@@ -372,17 +456,20 @@ function routeTo(route) {
   $("#mfg-screen").hidden = route !== "mfg" && route !== "hybrid";
   $("#amp-screen").hidden = route !== "amp";
   $("#simulator-screen").hidden = route !== "simulator";
+  $("#cal-screen").hidden = route !== "calibration";
   const labels = {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
     hybrid: ["MFG_Hybrid_Plating", "Diluted spots with water added first"],
     amp: ["PCR->AMP plate transfer", "96-well PCR plates into a 384-well Echo plate"],
-    simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"]
+    simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"],
+    calibration: ["Equipment calibration", "OT-2 deck, tip length, and pipette offset calibration"]
   };
   $("#app-title").textContent = labels[route][0];
   $("#app-subtitle").textContent = labels[route][1];
   if (route === "mfg" || route === "hybrid") setMfgMode(route === "hybrid" ? "hybrid" : "plating");
   if (route === "simulator") { state.dirty = true; window.setTimeout(draw, 0); }
+  if (route === "calibration") showCalibration();
 }
 
 async function checkSimulator() {
@@ -672,12 +759,12 @@ function readLocalFile(file) {
 
 $("#play-button").addEventListener("click", () => {
   if (!state.model) return;
-  if (state.time >= state.model.totalSeconds) state.time = 0;
+  if (state.time >= state.model.totalSeconds) { state.time = 0; state.playedStep = -1; }
   state.playing = !state.playing;
   state.dirty = true;
   updateUI();
 });
-$("#restart-button").addEventListener("click", () => { state.playing = false; setStep(0); });
+$("#restart-button").addEventListener("click", () => { state.playing = false; setStep(0); state.playedStep = -1; });
 $("#previous-button").addEventListener("click", () => { state.playing = false; setStep(currentStepIndex() - 1); });
 $("#next-button").addEventListener("click", () => { state.playing = false; setStep(currentStepIndex() + 1); });
 $("#timeline").addEventListener("input", (event) => { state.playing = false; setStep(Number(event.target.value)); });

@@ -263,3 +263,84 @@ canvas { display: block; width: 100%; height: 100%; }
   .run-status { gap: 9px; }
   .telemetry > div:not(.tip-meter) { display: none; }
 }
+
+/* ------------------------------------------------------------ operator pop-ups */
+.prompt-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 24px 26px 20px; color: var(--text); border: 1px solid #684073; border-radius: 12px; background: linear-gradient(145deg, rgba(55,28,64,.98), rgba(30,14,37,.99)); box-shadow: 0 30px 90px rgba(0,0,0,.55); }
+.prompt-dialog::backdrop { background: rgba(12, 5, 15, .62); backdrop-filter: blur(2px); }
+.prompt-dialog[data-tone="danger"] { border-color: #a0404f; }
+.prompt-dialog h2 { margin: 2px 0 12px; font-size: 19px; line-height: 1.25; }
+.prompt-body { color: #d8c9dc; font-size: 12px; line-height: 1.5; }
+.prompt-body p { margin: 0 0 10px; }
+.prompt-body h3 { margin: 14px 0 6px; font-size: 12px; }
+.prompt-warning { padding: 9px 11px; color: #ffe0a8; border: 1px solid #8a6a2d; border-radius: 6px; background: rgba(255,194,71,.08); }
+.prompt-question { padding: 10px 12px; border: 1px solid #70407b; border-radius: 6px; background: rgba(240,0,220,.07); }
+.prompt-aid { color: #ffd6fb; font-size: 11px; }
+.prompt-checklist { display: grid; gap: 6px; margin: 12px 0 4px; padding: 0; list-style: none; }
+.prompt-checklist label { display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; padding: 10px 11px; border: 1px solid #5a3a64; border-radius: 7px; background: rgba(24,11,30,.7); cursor: pointer; }
+.prompt-checklist input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--magenta); }
+.prompt-checklist strong { display: block; font-size: 12px; }
+.prompt-checklist small { display: block; margin-top: 2px; color: #a992af; font-size: 10px; }
+.prompt-checklist label:has(input:checked) { border-color: #3d8f63; background: rgba(72,223,139,.07); }
+.prompt-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.prompt-actions button:disabled { cursor: not-allowed; opacity: .4; }
+.prompt-canvas { display: block; width: 100%; height: 190px; margin-bottom: 10px; border: 1px solid #51305b; border-radius: 8px; background: radial-gradient(circle at 50% 40%, #37283a, #100a13 80%); }
+.prompt-deck { grid-template-rows: repeat(4, 46px); margin-bottom: 4px; }
+.danger-button { min-height: 40px; padding: 0 17px; color: white; font-weight: 750; border: 1px solid #ff6b81; border-radius: 6px; background: #8e2536; }
+.results-table td { vertical-align: top; }
+.results-table ul { margin: 0; padding-left: 14px; }
+.results-table li.fail { color: #ffb6be; }
+.result-chip { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.result-chip.pass { color: #0c2518; background: var(--green); }
+.result-chip.fail { color: white; background: #b0344a; }
+
+/* ------------------------------------------------------------ equipment calibration */
+.target-icon i { width: 30px; height: 30px; border: 2px solid #ed66ff; border-radius: 50%; background: linear-gradient(var(--magenta), var(--magenta)) center / 2px 100% no-repeat, linear-gradient(var(--magenta), var(--magenta)) center / 100% 2px no-repeat; }
+.cal-subhead { margin-top: 22px; }
+.cal-panel select.text-field { padding: 8px 9px; }
+.cal-status { display: grid; gap: 6px; margin-top: 8px; }
+.cal-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 9px 10px; border: 1px solid #4d3157; border-left: 3px solid #655d68; border-radius: 6px; background: rgba(41,20,49,.92); }
+.cal-row.ok { border-left-color: var(--green); }
+.cal-row.missing { border-left-color: #c790d0; }
+.cal-row.bad { border-left-color: #ff4d6d; }
+.cal-row strong { display: block; font-size: 11px; }
+.cal-row small { display: block; margin-top: 2px; color: #a992af; font-size: 9px; }
+.cal-row .secondary-button { min-height: 30px; padding: 0 11px; font-size: 10px; }
+.cal-row .secondary-button:disabled { cursor: not-allowed; opacity: .4; }
+.cal-mount { margin: 8px 0 0; color: #d5c6d9; font-size: 10px; }
+.cal-mount b { color: var(--magenta); text-transform: uppercase; letter-spacing: .08em; font-size: 9px; margin-right: 4px; }
+.cal-empty-note { margin: 4px 0; color: #a992af; font-size: 10px; }
+.cal-toggle { display: flex; align-items: center; gap: 7px; margin: 16px 0 10px; color: #cbb8cf; font-size: 10px; }
+.cal-toggle input { accent-color: var(--magenta); }
+.cal-wide { width: 100%; margin-bottom: 12px; }
+.cal-wide:disabled { cursor: not-allowed; opacity: .4; }
+.cal-workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; padding: 20px 26px 22px; overflow: hidden; }
+.cal-workspace .output-heading h2 { margin: 0; font-size: 22px; }
+.cal-heading-actions { display: flex; align-items: center; gap: 10px; }
+.cal-heading-actions .secondary-button { min-height: 32px; }
+.cal-progress { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cal-progress li { padding: 4px 10px; color: #8f7b95; border: 1px solid #4a2f53; border-radius: 20px; font-size: 9px; font-weight: 700; }
+.cal-progress li.done { color: #bfe9d2; border-color: #2f7050; background: rgba(72,223,139,.08); }
+.cal-progress li.active { color: white; border-color: var(--magenta); background: var(--magenta-soft); }
+.cal-views { position: relative; min-height: 0; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 10px; }
+.cal-controls { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 10px; }
+.cal-instruction, .jog-pad { padding: 14px 16px; border: 1px solid #51305b; border-radius: 9px; background: rgba(35,17,42,.95); }
+.cal-instruction h3 { margin: 0 0 6px; font-size: 16px; }
+.cal-step-body { min-height: 34px; margin: 0 0 12px; color: #d2c1d6; font-size: 12px; line-height: 1.45; }
+.cal-step-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.link-button { margin-top: 10px; padding: 0; color: #e59aff; border: 0; background: transparent; font-size: 10px; text-decoration: underline; }
+.jog-groups { display: flex; align-items: center; justify-content: center; gap: 22px; }
+.jog-xy { display: grid; grid-template-columns: repeat(3, 38px); grid-template-rows: repeat(3, 34px); gap: 4px; }
+.jog-xy b, .jog-z b { display: grid; place-items: center; color: #a68aab; font-size: 9px; }
+.jog-z { display: grid; grid-template-rows: 34px 34px 34px; gap: 4px; }
+.jog-pad button[data-jog] { width: 38px; color: white; border: 1px solid #744d81; border-radius: 6px; background: #3a1f45; font-size: 15px; }
+.jog-pad button[data-jog]:hover:not(:disabled) { border-color: var(--magenta); }
+.jog-pad button[data-jog]:disabled { cursor: not-allowed; opacity: .35; }
+.jog-steps { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 12px; overflow: hidden; border: 1px solid #684173; border-radius: 6px; }
+.jog-steps button { padding: 6px 0; color: #cbb8cf; border: 0; background: #2c1734; font-size: 10px; font-weight: 700; }
+.jog-steps button + button { border-left: 1px solid #684173; }
+.jog-steps button.active { color: #1b0b20; background: var(--magenta); }
+.jog-help { display: block; margin-top: 8px; color: #927d98; font-size: 9px; text-align: center; }
+.deck-slot.block { border-color: #a79faf; background: rgba(200,190,210,.12); }
+.cal-block-key::before { background: #b3abb8; }
+.cal-target-key::before { border: 1px dashed var(--magenta); }
+.cal-aid { position: absolute; left: 14px; bottom: 14px; max-width: calc(100% - 270px); padding: 6px 9px; color: #ffd6fb; border: 1px solid #7a3f84; border-radius: 6px; background: rgba(18,8,22,.88); font-size: 10px; font-weight: 600; }
