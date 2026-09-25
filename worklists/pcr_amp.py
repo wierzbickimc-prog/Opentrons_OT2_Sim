@@ -156,6 +156,14 @@ def plan_transfer(csv_text: str, identifier: str = "", transfer_volume: float = 
         "transfers": transfers,
         "warnings": warnings,
     }
+    # What the operator confirms before the protocol is generated (see worklists/labware.py).
+    plan["labware"] = [
+        {"role": "Filter tip rack", "slots": plan["tipSlots"], "loadName": "opentrons_96_filtertiprack_200ul"},
+        *[{"role": f"PCR plate {p['name']}", "slots": [p["slot"]], "loadName": "opentrons_96_wellplate_200ul_pcr_full_skirt"} for p in plan["sourcePlates"]],
+        {"role": f"Echo plate {destination_name or identifier}", "slots": [DESTINATION_SLOT], "loadName": "labcyte_echo_384pp"},
+        {"role": "Fixed trash", "slots": [12], "loadName": "opentrons_1_trash_1100ml_fixed"},
+    ]
+    plan["pipettes"] = [{"name": "p300_multi_gen2", "label": "P300 8-Channel GEN2", "mount": "left"}]
     plan["protocol"] = generate_protocol(plan)
     plan["filename"] = safe_filename(identifier)
     return plan

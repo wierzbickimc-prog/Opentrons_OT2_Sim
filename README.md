@@ -1,6 +1,6 @@
 # OT-2 Protocol Visualizer
 
-A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration walks operators through the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check on a practice robot.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration runs the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check, on a practice robot or a real OT-2.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ OT2_SITE_PASSWORD='your-password' python3 server.py
 
 `OT2_SITE_PASSWORD` gates the whole app: every page, asset, and API redirects to a sign-in page until the password is entered. Sessions last 12 hours, are signed with a per-process secret (restarting the server signs everyone out), and five wrong attempts from one address lock sign-in for five minutes. Leave the variable unset to disable the gate. Keep the password out of the repository: set it in the environment or in `~/.config/ot2-visualizer.env` on the host.
 
-Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, **WL Simulation** to review a protocol, or **Equipment calibration** to practice robot calibration.
+Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, **WL Simulation** to review a protocol, **Equipment calibration** to calibrate a robot or practice doing so, or **Labware Warehouse** to see every labware definition the tools use.
 
 After updating files while the server is already running, reload the page with the browser's cache bypass shortcut (`Cmd+Shift+R` on macOS or `Ctrl+Shift+R` on Linux/Windows).
 
@@ -94,7 +94,7 @@ Simulation executes uploaded Python on the server. It is open to anyone who can 
 python3 -m unittest discover tests
 ```
 
-`tests/test_calibration.py` runs `tests/calibration_flows.test.js` in Node (skipped when Node is missing): every flow with an exact operator, the App's flow order, a pipette offset saved 3 mm off failing the health check, pick-up misses, and crashes. `tests/test_simulation.py` runs the sample protocol and the fixtures in `tests/fixtures/` on the real engine and is skipped when `.venv-sim` is missing. Each fixture is a deliberately faulty protocol that must produce its finding.
+`tests/test_labware.py` checks the warehouse against the engine and the protocols. `LiveCalibrationProxyTests` in `tests/test_server.py` check the live proxy against a fake robot. `tests/test_calibration.py` runs `tests/calibration_flows.test.js` in Node (skipped when Node is missing): every flow with an exact operator, the App's flow order, a pipette offset saved 3 mm off failing the health check, pick-up misses, and crashes. `tests/test_simulation.py` runs the sample protocol and the fixtures in `tests/fixtures/` on the real engine and is skipped when `.venv-sim` is missing. Each fixture is a deliberately faulty protocol that must produce its finding.
 
 ## Equipment calibration
 
@@ -109,13 +109,34 @@ The OT-2's robot calibration is not a protocol. It is four interactive flows in 
 
 Every question the OT-2 App asks appears as a pop-up: Calibration Block or trash bin, the deck setup checklist (clear all other deck slots, tip rack in slot 8, block placement) that must be ticked before **Confirm placement**, "Did pipette pick up tip successfully?", removing the Calibration Block, returning the tip, the health-check results, and "Jog too far or bend a tip?" (also raised automatically when the pipette is jogged more than 1.5 mm into a surface). Jog with the on-screen pad or the keyboard: arrows for X and Y (↑ is toward the back), Shift+↑/↓ or W/S for Z, and 1/2/3 for 0.1, 1, or 10 mm steps.
 
-**Practice mode** is the only mode so far. It runs on a simulated OT-2 whose deck, mounts, and tips are off by hidden amounts; the close-up shows what an operator would see at the robot (a top-down view of the target and a side view of the gap), and calibrations are measured from where you jog, so a sloppy calibration fails the health check. **Show exact offsets** adds a numeric training aid. Nothing is sent to a robot, and practice calibrations reset when the page reloads. The flows use robot-server's command names so a later live mode can send the same commands to an OT-2's `/sessions` API.
+**Practice mode** runs on a simulated OT-2 whose deck, mounts, and tips are off by hidden amounts; the close-up shows what an operator would see at the robot (a top-down view of the target and a side view of the gap), and calibrations are measured from where you jog, so a sloppy calibration fails the health check. **Show exact offsets** adds a numeric training aid. Nothing is sent to a robot, and practice calibrations reset when the page reloads.
+
+**Live mode** calibrates a real OT-2. Enter the robot's address and the upload PIN (`OT2_UPLOAD_PIN`; live mode is off without it) and connect: the panel shows the robot's attached pipettes and saved calibrations. Each button, pop-up answer, and jog is one command to the robot's calibration sessions API (`/sessions` on port 31950), relayed by `POST /api/ot2/calibration`. The robot runs its own state machine and saves the calibrations; the page waits for each move to finish and drops key presses made while the robot moves, rather than queuing them. The proxy relays only the four calibration session types and their commands, and jogs of at most 10 mm per axis, to private LAN or Tailscale addresses. Before a flow starts, a calibration session left open on the robot (by the OT-2 App or a closed tab) is offered for ending; ending it returns its tip first. The OT-2 has no camera, so live mode has no close-up: watch the pipette at the robot. Stay at the robot while calibrating, and close the OT-2 App's calibration screens first.
+
+Two robot-server quirks are handled: the health check records the slot 5 height only when the operator jogs, so the page sends a zero-length jog before each check; and after tip length is saved in the combined tip length and pipette offset flow, starting over cannot continue, so "Jog too far or bend a tip?" is not offered there (exit and start pipette offset again; tip length is kept).
 
 Practice limits: the deck model is a translation per pipette (no rotation), tip pick-up succeeds within 1.2 mm of A1, and moves go straight to each target without the robot's arcs.
+
+## Labware Warehouse and confirmation
+
+The robot moves by labware definitions, and the simulator trusts them exactly, so a definition that differs from the physical item can crash the tips without any simulated warning. `worklists/labware.py` is the one list of every definition the tools use, served at `GET /api/labware` (and each full definition at `GET /api/labware/<load name>`):
+
+- **Opentrons standard** definitions are vendored in `labware/definitions/`, in the versions the engine loads at API 2.28 (a test compares them with the engine).
+- **Custom** definitions are built in code and embedded in the protocols that use them: the Labcyte Echo 384PP (nominal SLAS dimensions, not yet checked against a real plate) and the Nunc OmniTray agar plate. Tests require the protocols' embedded copies to match.
+- **Placeholders** stand in for labware with no definition. The plating tools used `corning_96_wellplate_360ul_flat` for agar OmniTrays; its well bottom (3.55 mm) is not the agar surface, so spots dispensed "1 mm above the agar" could go into it.
+
+The **Labware Warehouse** screen lists each definition with its status, the dimensions the robot relies on, what to check on the physical item, which tools use it, a JSON download, and a blueprint drawing (top view, front elevation, title block) drawn from the definition.
+
+**Every protocol build ends with a labware confirmation.** "Machine is ready" in MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP opens a checklist of every deck item (slots, definition, dimensions, what to check), the pipette and mount, and an extra check for each custom definition. Download, simulation, and robot upload appear only after every item is ticked. A placeholder, or a definition still waiting for measurements, cannot be confirmed, so the protocol cannot be generated.
+
+**The agar OmniTray definition is waiting for measurements.** Set `AGAR_PLATE_HEIGHT_MM` (filled tray, lid off) and `AGAR_SURFACE_HEIGHT_MM` (agar surface above the tray's base) in `worklists/labware.py`; until then MFG_Plating and MFG_Hybrid_Plating cannot generate protocols. The definition puts the 96 spot positions on the agar surface, so every spot is dispensed 1 mm above the agar. Pour to the measured volume: a higher surface drives tips into the agar.
+
+WL Simulation lists the labware in every simulated protocol and opens a review when any is custom, unknown to the warehouse, or a placeholder (the Corning plate in protocols built by these tools).
 
 ## Prototype scope
 
 - MFG_Plating supports 1–144 constructs, two source plates, two tip racks, and up to six destination plates.
+- Agar plates are Nunc OmniTrays; protocols generate only after the OmniTray is measured (see Labware Warehouse).
 - Constructs map column-first: A1–H1, then A2–H2. A partial final column uses all eight tips and unused channels aspirate air.
 - Starting volume is 130 µL in each occupied source well. Each source well ends at 90 µL; each destination replicate receives 10 µL.
 - Generated files can be downloaded, opened directly in WL Simulation, or uploaded to an OT-2 for analysis.

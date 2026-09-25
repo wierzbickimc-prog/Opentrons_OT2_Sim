@@ -344,3 +344,62 @@ canvas { display: block; width: 100%; height: 100%; }
 .cal-block-key::before { background: #b3abb8; }
 .cal-target-key::before { border: 1px dashed var(--magenta); }
 .cal-aid { position: absolute; left: 14px; bottom: 14px; max-width: calc(100% - 270px); padding: 6px 9px; color: #ffd6fb; border: 1px solid #7a3f84; border-radius: 6px; background: rgba(18,8,22,.88); font-size: 10px; font-weight: 600; }
+.cal-mode { display: grid; grid-template-columns: 1fr 1fr; margin: 18px 0 4px; overflow: hidden; border: 1px solid #684173; border-radius: 7px; }
+.cal-mode button { padding: 9px 0; color: #cbb8cf; border: 0; background: #2c1734; font-size: 11px; font-weight: 750; }
+.cal-mode button + button { border-left: 1px solid #684173; }
+.cal-mode button.active { color: #1b0b20; background: var(--magenta); }
+.cal-mode button:disabled { cursor: not-allowed; }
+.cal-connect { margin-top: 12px; margin-bottom: 4px; }
+.state-chip.moving { color: #1b0b20; border-color: var(--amber-warn); background: var(--amber-warn); }
+
+/* ------------------------------------------------------------ labware warehouse and confirmation */
+.prompt-checklist li.custom label { border-color: #8a6a2d; background: rgba(255,194,71,.06); }
+.prompt-checklist li.blocked label { cursor: default; border-color: #a0404f; background: rgba(176,52,74,.14); }
+.prompt-checklist li.blocked b { width: 16px; color: #ff8093; font-size: 14px; line-height: 1; }
+.prompt-dialog[data-tone="blueprint"] { width: min(980px, calc(100vw - 32px)); }
+.blueprint { display: block; width: 100%; height: auto; border-radius: 6px; }
+.blueprint .part { fill: none; stroke: #e8f1ff; stroke-width: 1.6; }
+.blueprint .well { fill: none; stroke: rgba(232,241,255,.75); stroke-width: .8; }
+.blueprint .hidden { fill: none; stroke: rgba(232,241,255,.6); stroke-width: .9; stroke-dasharray: 4 3; }
+.blueprint .center { stroke: rgba(232,241,255,.55); stroke-width: .8; stroke-dasharray: 14 3 3 3; }
+.blueprint .ground { stroke: #e8f1ff; stroke-width: 1; }
+.blueprint .dim, .blueprint .thin { stroke: #e8f1ff; stroke-width: .8; }
+.blueprint text { fill: #e8f1ff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.blueprint .label { font-size: 13px; font-weight: 700; letter-spacing: .12em; }
+.blueprint .dimtext { font-size: 11px; }
+.blueprint .note { font-size: 10px; letter-spacing: .06em; fill: rgba(232,241,255,.8); }
+.blueprint .tbkey { font-size: 9px; letter-spacing: .1em; fill: rgba(232,241,255,.7); }
+.blueprint .tbval { font-size: 11px; font-weight: 700; }
+.warehouse-screen { height: calc(100vh - 72px); overflow: auto; padding: 26px max(4vw, 30px) 40px; }
+.warehouse-heading { max-width: 980px; }
+.warehouse-heading h2 { margin: 4px 0 8px; font-size: 26px; }
+.warehouse-summary { color: #f884ef; font-size: 11px; font-weight: 700; }
+.warehouse-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-top: 16px; }
+.warehouse-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid #4d3157; border-left: 3px solid var(--green); border-radius: 9px; background: rgba(41,20,49,.92); cursor: pointer; }
+.warehouse-card:hover, .warehouse-card:focus-visible { border-color: var(--magenta); outline: none; }
+.warehouse-card.custom { border-left-color: #ffc247; }
+.warehouse-card.blocked { border-left-color: #ff4d6d; }
+.warehouse-head { display: flex; justify-content: space-between; gap: 10px; }
+.warehouse-head h3 { margin: 0 0 3px; font-size: 14px; }
+.warehouse-head code { color: #bca9c1; font-size: 10px; }
+.warehouse-badge { align-self: flex-start; padding: 3px 8px; border-radius: 20px; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.warehouse-badge.ok { color: #0c2518; background: var(--green); }
+.warehouse-badge.custom { color: #2b1d02; background: #ffc247; }
+.warehouse-badge.blocked { color: white; background: #b0344a; }
+.warehouse-source, .warehouse-verify { margin: 0; color: #d8c9dc; font-size: 11px; line-height: 1.45; }
+.warehouse-verify { color: #ffe0a8; }
+.warehouse-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; }
+.warehouse-card dt { color: #a992af; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.warehouse-card dd { margin: 0; color: #f0e6f2; font-size: 11px; }
+.warehouse-checks { margin: 0; padding-left: 16px; color: #cbb8cf; font-size: 11px; }
+.warehouse-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; }
+.warehouse-foot small { color: #a992af; font-size: 10px; }
+.warehouse-foot .secondary-button { min-height: 30px; padding: 0 11px; font-size: 10px; }
+.labware-list { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+.labware-row { display: grid; grid-template-columns: 44px 1fr; gap: 0 6px; padding: 5px 7px; border-left: 2px solid var(--green); border-radius: 4px; background: rgba(255,255,255,.03); font-size: 10px; }
+.labware-row.custom { border-left-color: #ffc247; }
+.labware-row.blocked { border-left-color: #ff4d6d; }
+.labware-row span { grid-row: span 2; color: #a992af; }
+.labware-row small { color: #a992af; }
+#sim-labware-card[data-status="warn"] { border-color: #8a6a2d; }
+#sim-labware-card[data-status="fail"] { border-color: #a0404f; }

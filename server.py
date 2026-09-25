@@ -26,7 +26,7 @@ from pathlib import Path
 from http.cookies import SimpleCookie
 from urllib.parse import unquote, urlparse
 
-from worklists import pcr_amp
+from worklists import labware, pcr_amp
 
 
 ROOT = Path(__file__).resolve().parent
@@ -38,9 +38,26 @@ MAX_PROTOCOL_BYTES = 500_000
 # .sim-cache (other users' results), .venv-sim, .git, and server code are not.
 STATIC_FILE_PATTERN = re.compile(r"^/[A-Za-z0-9_-]+\.(?:html|js|css|png|svg|ico)$")
 
+ROBOT_PORT = 31950
+SESSION_ID_PATTERN = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+CALIBRATION_SESSION_TYPES = {"deckCalibration", "tipLengthCalibration", "pipetteOffsetCalibration", "calibrationCheck"}
+# Commands the calibration screen sends; jog is the only one that carries data.
+CALIBRATION_COMMANDS = {
+    "calibration.loadLabware", "calibration.jog", "calibration.moveToTipRack", "calibration.moveToPointOne",
+    "calibration.moveToDeck", "calibration.moveToReferencePoint", "calibration.pickUpTip", "calibration.invalidateTip",
+    "calibration.saveOffset", "calibration.exitSession", "calibration.invalidateLastAction",
+    "calibration.deck.moveToPointTwo", "calibration.deck.moveToPointThree", "calibration.check.comparePoint",
+    "calibration.check.switchPipette", "calibration.check.returnTip", "calibration.check.transition",
+}
+MAX_JOG_MM = 10
+# A command returns when the robot finishes moving; homing can take a while.
+ROBOT_COMMAND_TIMEOUT = 120
+
 SIM_WORKER = ROOT / "simulation" / "worker.py"
 SIM_CACHE_DIR = ROOT / ".sim-cache"
 SIM_CACHE_LIMIT = 50
+# Bump when worker.py's result format changes so older cached results are not served.
+SIM_RESULT_FORMAT = 2
 SIMULATION_SLOT = threading.BoundedSemaphore(1)
 
 SESSION_COOKIE = "ot2_session"
@@ -91,6 +108,17 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
                 },
             })
             return
+        if path.endswith("/api/labware"):
+            self.send_json(200, labware.warehouse())
+            return
+        if "/api/labware/" in path:
+            load_name = unquote(path.rsplit("/", 1)[1])
+            found = labware.definition(load_name) if re.fullmatch(r"[a-z0-9_]{1,80}", load_name) else None
+            if found is None:
+                self.send_json(404, {"error": "No definition for that labware."})
+            else:
+                self.send_json(200, found)
+            return
         if path != "/" and not STATIC_FILE_PATTERN.fullmatch(unquote(path)):
             self.send_error(404, "Not found")
             return
@@ -117,6 +145,9 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             return
         if path.endswith("/api/pcr-amp/plan"):
             self.handle_pcr_amp_plan()
+            return
+        if path.endswith("/api/ot2/calibration"):
+            self.handle_calibration()
             return
         if not path.endswith("/api/ot2/upload"):
             self.send_json(404, {"error": "Not found"})
@@ -255,6 +286,19 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
         except RequestError as exc:
             self.send_json(exc.status, {"error": exc.message})
 
+    def handle_calibration(self) -> None:
+        """Live calibration: relays one allowed robot-server /sessions call to an OT-2."""
+        try:
+            request = self.read_json_request()
+            self.authorize(request.get("pin", ""), purpose="Live calibration")
+            host = self.validate_robot(request.get("robotAddress", ""))
+            self.send_json(200, calibration_operation(host, request))
+        except RequestError as exc:
+            self.send_json(exc.status, {"error": exc.message})
+        except Exception as exc:
+            self.log_error("Live calibration failed: %s", exc)
+            self.send_json(502, {"error": "The OT-2 did not respond. Check that it is on, reachable from this server, and not busy."})
+
     def read_json_request(self) -> dict:
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -359,6 +403,90 @@ def upload_protocol(host: str, filename: str, protocol: bytes, key: str) -> dict
             if exc.code not in (400, 404, 422):
                 break
     raise last_error or RuntimeError("OT-2 upload failed")
+
+
+def calibration_operation(host: str, request: dict) -> dict:
+    """Validate one live-calibration operation and perform it on the robot."""
+    op = request.get("op")
+    if op == "status":
+        return {
+            "health": robot_call(host, "GET", "/health"),
+            "pipettes": robot_call(host, "GET", "/pipettes"),
+            "calibration": robot_call(host, "GET", "/calibration/status"),
+            "pipetteOffsets": robot_call(host, "GET", "/calibration/pipette_offset").get("data", []),
+            "tipLengths": robot_call(host, "GET", "/calibration/tip_length").get("data", []),
+            "sessions": [
+                {"id": item.get("id"), "sessionType": item.get("sessionType")}
+                for item in robot_call(host, "GET", "/sessions").get("data", [])
+            ],
+        }
+    if op == "create":
+        session_type = request.get("sessionType")
+        if session_type not in CALIBRATION_SESSION_TYPES:
+            raise RequestError(400, "Unknown calibration type.")
+        params = request.get("createParams") or {}
+        if not isinstance(params, dict):
+            raise RequestError(400, "Invalid calibration settings.")
+        create: dict = {}
+        if session_type != "deckCalibration":
+            create["hasCalibrationBlock"] = params.get("hasCalibrationBlock") is True
+        if session_type in ("tipLengthCalibration", "pipetteOffsetCalibration"):
+            if params.get("mount") not in ("left", "right"):
+                raise RequestError(400, "Choose the left or right pipette.")
+            create["mount"] = params["mount"]
+        if session_type == "pipetteOffsetCalibration":
+            create["shouldRecalibrateTipLength"] = params.get("shouldRecalibrateTipLength") is True
+        body = {"data": {"sessionType": session_type, **({"createParams": create} if create else {})}}
+        return robot_call(host, "POST", "/sessions", body)["data"]
+    session_id = request.get("sessionId", "")
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise RequestError(400, "Invalid session.")
+    if op == "session":
+        return robot_call(host, "GET", f"/sessions/{session_id}")["data"]
+    if op == "delete":
+        robot_call(host, "DELETE", f"/sessions/{session_id}")
+        return {"deleted": session_id}
+    if op != "command":
+        raise RequestError(400, "Unknown calibration operation.")
+    command = request.get("command")
+    if command not in CALIBRATION_COMMANDS:
+        raise RequestError(400, "That calibration command is not allowed.")
+    data: dict = {}
+    if command == "calibration.jog":
+        vector = (request.get("data") or {}).get("vector")
+        if (not isinstance(vector, list) or len(vector) != 3
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) <= MAX_JOG_MM for v in vector)):
+            raise RequestError(400, f"Jogs are three numbers of at most {MAX_JOG_MM} mm.")
+        data = {"vector": [float(v) for v in vector]}
+    robot_call(host, "POST", f"/sessions/{session_id}/commands/execute", {"data": {"command": command, "data": data}}, timeout=ROBOT_COMMAND_TIMEOUT)
+    if command == "calibration.exitSession":
+        robot_call(host, "DELETE", f"/sessions/{session_id}")
+        return {"id": session_id, "details": {"currentStep": "sessionExited"}}
+    return robot_call(host, "GET", f"/sessions/{session_id}")["data"]
+
+
+def robot_call(host: str, method: str, path: str, body: dict | None = None, timeout: float = 20) -> dict:
+    """One robot-server request; robot errors become RequestErrors carrying the robot's reason."""
+    request = urllib.request.Request(
+        f"http://{host}:{ROBOT_PORT}{path}",
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
+        method=method,
+        headers={"Accept": "application/json", "Content-Type": "application/json", "Opentrons-Version": "*"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(5_000_000)
+    except urllib.error.HTTPError as exc:
+        try:
+            error = json.loads(exc.read(100_000))
+            errors = error.get("errors") or [error]
+            detail = errors[0].get("detail") or errors[0].get("title") or errors[0].get("message")
+        except Exception:
+            detail = None
+        if exc.code in (400, 403, 404, 409, 422):
+            raise RequestError(exc.code, f"The OT-2 refused: {detail}" if detail else f"The OT-2 refused the request ({exc.code}).") from exc
+        raise RequestError(502, f"The OT-2 reported an error ({exc.code}){f': {detail}' if detail else ''}. Check the robot, then exit and start the calibration again.") from exc
+    return json.loads(raw) if raw else {}
 
 
 def site_password() -> str:
@@ -510,7 +638,7 @@ def simulate_protocol(filename: str, protocol: str) -> tuple[int, bytes]:
     version = engine_version()
     if not python.exists():
         raise RequestError(503, "The OT-2 simulator is not installed on this server. Run scripts/setup_simulator.sh, then restart the server.")
-    key = hashlib.sha256(f"{version}\0{filename}\0{protocol}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{version}\0{SIM_RESULT_FORMAT}\0{filename}\0{protocol}".encode("utf-8")).hexdigest()
     cached = SIM_CACHE_DIR / f"{key}.json"
     if cached.exists():
         os.utime(cached)

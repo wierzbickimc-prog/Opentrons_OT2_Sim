@@ -113,11 +113,12 @@ function showPrompt({ eyebrow = "", title, body = "", checklist = [], actions, c
   $("#prompt-eyebrow").hidden = !eyebrow;
   $("#prompt-title").textContent = title;
   $("#prompt-body").innerHTML = body;
-  $("#prompt-checklist").innerHTML = checklist.map((item, i) => `<li><label><input type="checkbox" data-check="${i}"><span><strong>${escapeHtml(item.label)}</strong>${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ""}</span></label></li>`).join("");
+  // A blocked item has no checkbox and keeps checklist actions disabled.
+  $("#prompt-checklist").innerHTML = checklist.map((item, i) => `<li class="${item.blocked ? "blocked" : item.tone || ""}"><label>${item.blocked ? `<b aria-hidden="true">✕</b>` : `<input type="checkbox" data-check="${i}">`}<span><strong>${escapeHtml(item.label)}</strong>${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ""}</span></label></li>`).join("");
   $("#prompt-checklist").hidden = !checklist.length;
   $("#prompt-actions").innerHTML = actions.map((action, i) => `<button type="button" class="${action.kind === "primary" ? "primary-button" : action.kind === "danger" ? "danger-button" : "secondary-button"}" data-action="${i}"${action.needsChecklist && checklist.length ? " disabled" : ""}>${escapeHtml(action.label)}</button>`).join("");
   const syncChecklist = () => {
-    const done = [...dialog.querySelectorAll("[data-check]")].every((box) => box.checked);
+    const done = !checklist.some((item) => item.blocked) && [...dialog.querySelectorAll("[data-check]")].every((box) => box.checked);
     actions.forEach((action, i) => { if (action.needsChecklist) dialog.querySelector(`[data-action="${i}"]`).disabled = !done; });
   };
   $("#prompt-checklist").onchange = syncChecklist;
@@ -251,6 +252,7 @@ function loadResult(result, filename) {
   $("#gcode-download").disabled = !model.gcode.length;
   $("#sim-overlay").hidden = true;
   renderSafety(model);
+  loadWarehouse().catch(() => null).then(() => { if (state.model === model) reviewSimulatedLabware(model, metadata); });
   if (result.status !== "succeeded") {
     showNotice("The protocol stopped with an Opentrons engine error. Steps up to the failure are shown; see Safety checks.", true);
   } else {
@@ -457,19 +459,22 @@ function routeTo(route) {
   $("#amp-screen").hidden = route !== "amp";
   $("#simulator-screen").hidden = route !== "simulator";
   $("#cal-screen").hidden = route !== "calibration";
+  $("#warehouse-screen").hidden = route !== "warehouse";
   const labels = {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
     hybrid: ["MFG_Hybrid_Plating", "Diluted spots with water added first"],
     amp: ["PCR->AMP plate transfer", "96-well PCR plates into a 384-well Echo plate"],
     simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"],
-    calibration: ["Equipment calibration", "OT-2 deck, tip length, and pipette offset calibration"]
+    calibration: ["Equipment calibration", "OT-2 deck, tip length, and pipette offset calibration"],
+    warehouse: ["Labware Warehouse", "Every labware definition the tools use"]
   };
   $("#app-title").textContent = labels[route][0];
   $("#app-subtitle").textContent = labels[route][1];
   if (route === "mfg" || route === "hybrid") setMfgMode(route === "hybrid" ? "hybrid" : "plating");
   if (route === "simulator") { state.dirty = true; window.setTimeout(draw, 0); }
   if (route === "calibration") showCalibration();
+  if (route === "warehouse") showWarehouse();
 }
 
 async function checkSimulator() {
@@ -509,6 +514,37 @@ function slotList(slots) {
   return contiguous ? `Slots ${slots[0]}–${slots[slots.length - 1]}` : `Slots ${slots.join(", ")}`;
 }
 
+function agarPlate() { return window.labwareWarehouse ? window.labwareWarehouse.agar.plate : null; }
+function agarPlateName() {
+  const plate = agarPlate();
+  return plate && plate.status !== "placeholder" ? plate.displayName : "Agar OmniTray (no definition yet)";
+}
+function agarPlateNote() {
+  const plate = agarPlate();
+  if (!plate) return "";
+  return plate.status === "placeholder" ? "Placeholder: send OmniTray measurements to generate" : `Agar surface ${plate.wellBottom} mm above the base`;
+}
+
+// Everything the plating protocol puts on the deck, for the labware confirmation.
+function mfgLabware(workflow) {
+  const plate = agarPlate();
+  const items = [
+    { role: "Tip rack", slots: workflow.tipSlots, loadName: "opentrons_96_tiprack_20ul" },
+    { role: "Source PCR plate", slots: workflow.sourceSlots, loadName: "opentrons_96_wellplate_200ul_pcr_full_skirt" },
+    { role: "Agar plate", slots: workflow.destinationSlots, loadName: plate ? plate.loadName : "built_agar_omnitray_96_spots" }
+  ];
+  if (workflow.reservoirSlot) items.push({ role: "Water reservoir", slots: [workflow.reservoirSlot], loadName: "nest_1_reservoir_195ml" });
+  items.push({ role: "Fixed trash", slots: [12], loadName: "opentrons_1_trash_1100ml_fixed" });
+  return items;
+}
+
+// Python that loads the measured agar OmniTray; generation is blocked until it is measured.
+function agarLoadCode() {
+  const agar = window.labwareWarehouse && window.labwareWarehouse.agar;
+  if (!agar || agar.plate.status === "placeholder") throw new Error("The agar OmniTray has no definition yet.");
+  return agarDefinitionPython(agar.plateHeight, agar.surfaceHeight);
+}
+
 function billOfMaterials(workflow) {
   const tipNote = workflow.mode === "hybrid"
     ? `${workflow.tipColumns} tip columns: 1 for all water, ${workflow.sourceColumns} for culture`
@@ -517,7 +553,7 @@ function billOfMaterials(workflow) {
     ["P20 8-Channel GEN2 pipette", 1, "Left mount", ""],
     ["Opentrons 96 Tip Rack 20 µL", workflow.tipSlots.length, slotList(workflow.tipSlots), tipNote],
     ["Opentrons 96-well PCR plate, 200 µL full skirt", workflow.sourceSlots.length, slotList(workflow.sourceSlots), "Culture, 130 µL per occupied well"],
-    ["Agar plate (Corning 96-well flat footprint)", workflow.destinationSlots.length, slotList(workflow.destinationSlots), ""]
+    [agarPlateName(), workflow.destinationSlots.length, slotList(workflow.destinationSlots), agarPlateNote()]
   ];
   if (workflow.reservoirSlot) {
     items.push(["NEST 1-Well Reservoir 195 mL", 1, `Slot ${workflow.reservoirSlot}`, `Water, filled to the line (run uses ${(workflow.sourceColumns * 8 * 16 / 1000).toFixed(1)} mL)`]);
@@ -588,13 +624,15 @@ WATER_OVERDRAW = 2
 SPOT_HEIGHT_MM = 1
 
 
+${agarLoadCode()}
+
 def run(protocol: protocol_api.ProtocolContext):
     source_plates = [
         protocol.load_labware("opentrons_96_wellplate_200ul_pcr_full_skirt", slot)
         for slot in SOURCE_SLOTS
     ]
     destination_plates = [
-        protocol.load_labware("corning_96_wellplate_360ul_flat", slot)
+        protocol.load_labware_from_definition(agar_definition(), slot)
         for slot in DESTINATION_SLOTS
     ]
     tip_racks = [
@@ -683,13 +721,15 @@ TIP_SLOTS = ${tipSlots}
 DESTINATION_SLOTS = ${destinationSlots}
 
 
+${agarLoadCode()}
+
 def run(protocol: protocol_api.ProtocolContext):
     source_plates = [
         protocol.load_labware("opentrons_96_wellplate_200ul_pcr_full_skirt", slot)
         for slot in SOURCE_SLOTS
     ]
     destination_plates = [
-        protocol.load_labware("corning_96_wellplate_360ul_flat", slot)
+        protocol.load_labware_from_definition(agar_definition(), slot)
         for slot in DESTINATION_SLOTS
     ]
     tip_racks = [
@@ -861,14 +901,21 @@ $("#worklist-form").addEventListener("submit", (event) => {
   showMfgStatus(`Mapped ${count} constructs across ${draftWorkflow.sourceColumns} source columns. Verify the deck before continuing.`, false);
 });
 
-$("#machine-ready").addEventListener("click", () => {
+$("#machine-ready").addEventListener("click", async () => {
   if (!draftWorkflow) return;
-  state.generatedProtocol = generateProtocol(draftWorkflow);
+  const workflow = draftWorkflow;
+  const confirmed = await confirmLabware({
+    title: `Confirm labware for ${workflow.identifier}`,
+    items: mfgLabware(workflow),
+    pipettes: [{ name: "p20_multi_gen2", label: "P20 8-Channel GEN2", mount: "left" }]
+  });
+  if (!confirmed || draftWorkflow !== workflow) return;
+  state.generatedProtocol = generateProtocol(workflow);
   $("#delivery-panel").hidden = false;
   $("#worklist-state").textContent = "Machine ready";
   $("#worklist-state").classList.add("ready");
   $("#machine-ready").disabled = true;
-  showMfgStatus("Machine readiness confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
+  showMfgStatus("Labware confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
 });
 
 $("#download-protocol").addEventListener("click", () => {
@@ -1036,14 +1083,17 @@ $("#amp-form").addEventListener("submit", (event) => {
   calculateAmpPlan();
 });
 
-$("#amp-machine-ready").addEventListener("click", () => {
+$("#amp-machine-ready").addEventListener("click", async () => {
   if (!ampPlan) return;
+  const plan = ampPlan;
+  const confirmed = await confirmLabware({ title: `Confirm labware for ${plan.identifier}`, items: plan.labware, pipettes: plan.pipettes });
+  if (!confirmed || ampPlan !== plan) return;
   ampConfirmed = true;
   $("#amp-delivery-panel").hidden = false;
   $("#amp-state").textContent = "Machine ready";
   $("#amp-state").classList.add("ready");
   $("#amp-machine-ready").disabled = true;
-  showAmpStatus("Machine readiness confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
+  showAmpStatus("Labware confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
 });
 
 $("#amp-download").addEventListener("click", () => {

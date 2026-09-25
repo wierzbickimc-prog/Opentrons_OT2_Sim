@@ -557,6 +557,8 @@ def describe_labware(view: Any, item: Any, definition: Any, origin: Any) -> Dict
     return {
         "id": item.id,
         "loadName": definition.parameters.loadName,
+        "namespace": definition.namespace,
+        "version": definition.version,
         "displayName": definition.metadata.displayName,
         "category": str(definition.metadata.displayCategory),
         "isTiprack": is_tiprack,

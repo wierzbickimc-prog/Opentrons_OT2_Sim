@@ -1,9 +1,10 @@
 "use strict";
 
 // Equipment calibration screen. Runs the OT-2 App's calibration flows
-// (calibration_flows.js) on a practice robot. Every setup step and question
-// the OT-2 App asks is a pop-up; the operator jogs with the pad or the keys,
-// watching a close-up of the pipette and its target.
+// (calibration_flows.js) on a practice robot or, in live mode, on a real OT-2
+// through server.py. Every setup step and question the OT-2 App asks is a
+// pop-up; the operator jogs with the pad or the keys. Practice mode shows a
+// close-up of the pipette and its target; live mode moves the real robot.
 
 const CAL_FLOW_TITLES = {
   deckCalibration: "Deck Calibration",
@@ -30,8 +31,11 @@ const CAL_COMPARISON_LABELS = { comparingTip: "Tip height", comparingHeight: "Z 
 const CAL_SURFACE_COLORS = { deck: "#2c2331", "tip rack": "#3a2f41", tip: "#6f5a7c", "trash bin": "#120d15", "Calibration Block": "#9a929f" };
 
 const calUI = {
-  robot: new PracticeRobot({ left: "p20_multi_gen2", right: null }),
+  mode: "practice",
+  practiceRobot: new PracticeRobot({ left: "p20_multi_gen2", right: null }),
+  liveRobot: null,
   session: null,
+  busy: false,
   stepSize: 1,
   display: null,
   promptedEntry: -1,
@@ -51,8 +55,17 @@ function calNotice(message, isError = false) {
   notice.textContent = message || "";
 }
 
+function calRobot() { return calUI.mode === "live" ? calUI.liveRobot : calUI.practiceRobot; }
+function calModeLabel() { return calUI.mode === "live" ? `Live OT-2${calUI.liveRobot ? ` · ${calUI.liveRobot.name}` : ""}` : "Practice robot"; }
+
 function calMountName(mount) { return mount === "left" ? "Left" : "Right"; }
-function calTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function calTime(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+function calWhen(iso) { return iso ? ` · ${calTime(iso)}` : ""; }
 function calSigned(value) { return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(2)}`; }
 function calStepName(step) { const words = step.replace(/([A-Z])/g, " $1").toLowerCase(); return words[0].toUpperCase() + words.slice(1); }
 
@@ -66,9 +79,22 @@ function showCalibration() {
 // ------------------------------------------------------------ status panel
 
 function renderCalPanel() {
-  const robot = calUI.robot;
-  const cal = robot.calibration;
+  const live = calUI.mode === "live";
   const busy = Boolean(calUI.session);
+  document.querySelectorAll(".cal-mode button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === calUI.mode);
+    button.disabled = busy;
+  });
+  $("#cal-practice-setup").hidden = live;
+  $("#cal-practice-tools").hidden = live;
+  $("#cal-live-form").hidden = !live;
+  $("#cal-live-form").querySelectorAll("input, button").forEach((control) => { control.disabled = busy; });
+  const robot = calRobot();
+  if (!robot) {
+    $("#cal-status").innerHTML = `<p class="cal-empty-note">Connect to an OT-2 to see its pipettes and saved calibrations.</p>`;
+    return;
+  }
+  const cal = robot.calibration;
   for (const mount of ["left", "right"]) {
     const select = $(`#cal-${mount}-pipette`);
     select.innerHTML = `<option value="">None</option>` + Object.entries(CAL_PIPETTES).map(([name, p]) => `<option value="${name}">${escapeHtml(p.label)}</option>`).join("");
@@ -82,14 +108,14 @@ function renderCalPanel() {
   const row = (title, detail, tone, action) => `<div class="cal-row ${tone}"><div><strong>${title}</strong><small>${escapeHtml(detail)}</small></div>${action}</div>`;
   const rows = [];
   const deck = cal.deck;
-  rows.push(row("Deck", deck ? `${deck.bad ? "Recalibration recommended" : "Calibrated"} · ${calTime(deck.at)}` : "Not calibrated · start here",
+  rows.push(row("Deck", deck ? `${deck.bad ? "Recalibration recommended" : "Calibrated"}${calWhen(deck.at)}` : "Not calibrated · start here",
     !deck ? "missing" : deck.bad ? "bad" : "ok", button(deck ? "Recalibrate" : "Calibrate", "deckCalibration")));
   for (const mount of robot.attachedMounts()) {
-    const pipette = CAL_PIPETTES[robot.pipettes[mount]];
+    const pipette = calPipetteInfo(robot.pipettes[mount]);
     const tip = cal.tipLength[mount];
     const offset = cal.pipetteOffset[mount];
     rows.push(`<div class="cal-mount"><b>${calMountName(mount)}</b> ${escapeHtml(pipette.label)}</div>`);
-    rows.push(row("Tip length", tip ? `${tip.value.toFixed(2)} mm${tip.bad ? " · recalibration recommended" : ""} · ${calTime(tip.at)}` : "Not calibrated",
+    rows.push(row("Tip length", tip ? `${tip.value.toFixed(2)} mm${tip.bad ? " · recalibration recommended" : ""}${calWhen(tip.at)}` : "Not calibrated",
       !tip ? "missing" : tip.bad ? "bad" : "ok", button(tip ? "Recalibrate" : "Calibrate", "tipLengthCalibration", mount)));
     const offsetBlocker = robot.readiness("pipetteOffsetCalibration", mount);
     const offsetDetail = offset
@@ -97,11 +123,11 @@ function renderCalPanel() {
       : offsetBlocker || (tip ? "Not calibrated" : "Not calibrated · measures tip length first");
     rows.push(row("Pipette offset", offsetDetail, !offset ? "missing" : offset.bad ? "bad" : "ok", button(offset ? "Recalibrate" : "Calibrate", "pipetteOffsetCalibration", mount)));
   }
-  if (!robot.attachedMounts().length) rows.push(`<p class="cal-empty-note">Attach a pipette to calibrate.</p>`);
+  if (!robot.attachedMounts().length) rows.push(`<p class="cal-empty-note">${live ? "No pipettes are attached to this robot." : "Attach a pipette to calibrate."}</p>`);
   const health = cal.health;
   const healthPassed = health && calHealthPassed(health);
   const healthBlocker = robot.readiness("calibrationCheck");
-  rows.push(row("Calibration Health Check", health ? `${healthPassed ? "Passed" : "Found calibrations to redo"} · ${calTime(health.at)}` : healthBlocker || "Ready",
+  rows.push(row("Calibration Health Check", health ? `${healthPassed ? "Passed" : "Found calibrations to redo"}${calWhen(health.at)}` : healthBlocker || "Ready",
     health ? (healthPassed ? "ok" : "bad") : healthBlocker ? "missing" : "", button("Check health", "calibrationCheck")));
   $("#cal-status").innerHTML = rows.join("");
   $("#cal-new-robot").disabled = busy;
@@ -115,22 +141,28 @@ function calHealthPassed(results) {
 
 async function startCalibration(type, mount) {
   if (calUI.session) return;
-  const robot = calUI.robot;
+  const robot = calRobot();
   const blocker = robot.readiness(type, mount);
   if (blocker) { calNotice(blocker, true); return; }
   const intro = calIntro(type, mount);
   const actions = intro.askBlock
     ? [{ label: "Cancel", value: "cancel" }, { label: "Use trash bin", value: "trash" }, { label: "Use Calibration Block", value: "block", kind: "primary" }]
     : [{ label: "Cancel", value: "cancel" }, { label: "Get started", value: "start", kind: "primary" }];
-  const choice = await showPrompt({ eyebrow: `Practice robot · ${intro.subject}`, title: intro.title, body: intro.body, actions, cancel: "cancel" });
+  const liveWarning = robot.live ? `<p class="prompt-warning">This moves the OT-2 “${escapeHtml(robot.name)}”. Stay at the robot and keep hands off the deck while it moves. Exit here, or switch the robot off, if anything looks wrong.</p>` : "";
+  const choice = await showPrompt({ eyebrow: `${calModeLabel()} · ${intro.subject}`, title: intro.title, body: intro.body + liveWarning, actions, cancel: "cancel" });
   if (choice === "cancel" || !choice) return;
+  if (robot.live && !(await calEndStaleSessions(robot))) return;
   try {
-    calUI.session = robot.createSession(type, { mount, hasCalibrationBlock: choice === "block" });
+    calUI.busy = true;
+    renderCalStep();
+    calUI.session = await robot.createSession(type, { mount, hasCalibrationBlock: choice === "block" });
   } catch (error) {
     calNotice(error.message, true);
     return;
+  } finally {
+    calUI.busy = false;
   }
-  calUI.display = { ...calUI.session.nozzle };
+  calUI.display = calUI.session.live ? null : { ...calUI.session.nozzle };
   calUI.promptedEntry = -1;
   calUI.crashed = false;
   calNotice("");
@@ -138,24 +170,47 @@ async function startCalibration(type, mount) {
   await calSend({ command: CAL_CMD.loadLabware });
 }
 
+// A robot runs one calibration session at a time; one left open (by the OT-2 App or a
+// closed browser tab) must end before another starts.
+async function calEndStaleSessions(robot) {
+  await robot.refresh();
+  if (!robot.sessions.length) return true;
+  const kinds = robot.sessions.map((item) => CAL_FLOW_TITLES[item.sessionType] || item.sessionType).join(", ");
+  const choice = await showPrompt({
+    eyebrow: calModeLabel(),
+    title: "A session is already open on this robot",
+    body: `<p>${escapeHtml(kinds)} is still open, from the OT-2 App or an earlier visit here. Ending it returns any tip it holds to the tip rack; make sure nobody is using it.</p>`,
+    actions: [{ label: "Cancel", value: "cancel" }, { label: "End it and continue", value: "end", kind: "danger" }],
+    cancel: "cancel"
+  });
+  if (choice !== "end") return false;
+  try {
+    for (const item of robot.sessions) await robot.endSession(item.id);
+    return true;
+  } catch (error) {
+    calNotice(error.message, true);
+    return false;
+  }
+}
+
 function calIntro(type, mount) {
-  const robot = calUI.robot;
+  const robot = calRobot();
   const cal = robot.calibration;
   const warning = (text) => `<p class="prompt-warning">${text}</p>`;
   const blockQuestion = `<p class="prompt-question"><strong>Do you have a Calibration Block?</strong> Without one, the flat surface of the fixed trash bin is used instead.</p>`;
   if (type === "deckCalibration") {
     const deckMount = robot.deckCalibrationMount();
-    const pipette = CAL_PIPETTES[robot.pipettes[deckMount]];
+    const pipette = calPipetteInfo(robot.pipettes[deckMount]);
     const offsets = ["left", "right"].some((m) => cal.pipetteOffset[m]);
     return {
       title: "Deck Calibration", subject: `${pipette.label} · ${deckMount} mount`, askBlock: false,
       body: `<p>Deck calibration ensures positional accuracy so that your robot moves as expected. It will accurately establish the OT-2’s deck orientation relative to the gantry.</p>
-        <p>You will use the <strong>${escapeHtml(pipette.label)}</strong> on the ${deckMount} mount with one tip from an ${escapeHtml(CAL_TIPRACKS[pipette.tipRack].label)} in slot 8, then jog it to the deck in slot 5 and the crosses in slots 1, 3, and 7.</p>`
+        <p>You will use the <strong>${escapeHtml(pipette.label)}</strong> on the ${deckMount} mount with one tip from an ${escapeHtml(calTipRackInfo(pipette.tipRack).label)} in slot 8, then jog it to the deck in slot 5 and the crosses in slots 1, 3, and 7.</p>`
         + (offsets ? warning("Recalibrating the deck clears pipette offset data. You will need to recalibrate each pipette’s offset afterward.") : "")
     };
   }
   if (type === "calibrationCheck") {
-    const order = robot.checkOrder().map((m) => `${CAL_PIPETTES[robot.pipettes[m]].label} (${m})`).join(", then ");
+    const order = robot.checkOrder().map((m) => `${calPipetteInfo(robot.pipettes[m]).label} (${m})`).join(", then ");
     return {
       title: "Calibration Health Check", subject: "all pipettes", askBlock: true,
       body: `<p>Calibration Health Check diagnoses problems with Deck, Tip Length, and Pipette Offset Calibration.</p>
@@ -163,7 +218,7 @@ function calIntro(type, mount) {
         <p>Order: ${escapeHtml(order)}.</p>${blockQuestion}`
     };
   }
-  const pipette = CAL_PIPETTES[robot.pipettes[mount]];
+  const pipette = calPipetteInfo(robot.pipettes[mount]);
   const subject = `${pipette.label} · ${mount} mount`;
   if (type === "tipLengthCalibration") {
     return {
@@ -180,20 +235,28 @@ function calIntro(type, mount) {
   };
 }
 
+// Runs commands in order; on a live robot each resolves when the robot stops moving.
+// Commands sent while the robot is moving are dropped, not queued.
 async function calSend(...commands) {
   const session = calUI.session;
-  if (!session) return;
+  if (!session || calUI.busy) return;
+  calUI.busy = true;
+  renderCalStep();
   try {
     for (const { command, data } of commands) {
       if (command === CAL_CMD.exit) calUI.exitedFrom = session.currentStep;
-      session.execute(command, data);
+      await session.execute(command, data);
     }
+    if (session.live) calNotice("");
   } catch (error) {
     calNotice(error.message, true);
+  } finally {
+    calUI.busy = false;
   }
-  if (session.currentStep === "sessionExited") { calFinish(session); return; }
+  if (session.currentStep === "sessionExited") { await calFinish(session); return; }
   calUI.dirty = true;
   renderCalStep();
+  if (session.live) { await calAfterStep(); return; }
   const depth = session.crashDepth();
   if (depth < 0.5) calUI.crashed = false;
   if (depth > CAL_CRASH_MM && !calUI.crashed) {
@@ -221,12 +284,16 @@ async function calAfterStep() {
   if (prompt) await prompt(session);
 }
 
-function calFinish(session) {
-  const cal = calUI.robot.calibration;
+async function calFinish(session) {
+  if (session.live) {
+    try { await calRobot().refresh(); } catch (error) { calNotice(error.message, true); }
+  }
+  const cal = calRobot().calibration;
   const from = calUI.exitedFrom;
   const mount = calMountName(session.mount).toLowerCase();
   let message = `${CAL_FLOW_TITLES[session.flowKey]} exited before it finished; unfinished steps were not saved.`;
   if (from === "calibrationComplete" && session.sessionType === "deckCalibration") message = "Deck calibration saved. Pipette offsets were cleared; calibrate each pipette’s offset next.";
+  else if (from === "calibrationComplete" && session.sessionType === "tipLengthCalibration" && session.live) message = `Tip length saved for the ${mount} pipette. Recalibrate its pipette offset next.`;
   else if (from === "calibrationComplete" && session.sessionType === "tipLengthCalibration") message = `Tip length saved for the ${mount} pipette. Its pipette offset was cleared; recalibrate it next.`;
   else if (from === "calibrationComplete") message = `Pipette offset${session.withTipLength ? " and tip length" : ""} saved for the ${mount} pipette.`;
   else if (from === "resultsSummary" && cal.health) message = calHealthPassed(cal.health) ? "Calibration Health Check passed." : "Calibration Health Check found calibrations to redo; they are flagged on the left.";
@@ -300,12 +367,15 @@ async function calTipPrompt(session) {
   const toDeck = calTipMoveCommand(session) === CAL_CMD.moveToDeck;
   const destination = toDeck ? "slot 5" : session.usesBlock ? "block" : "trash bin";
   const miss = calUI.showOffsets && session.tip && session.tip.miss ? `<p class="prompt-aid">Training aid: the tip did not seat. ${escapeHtml(session.tip.miss)}</p>` : "";
+  const nozzle = session.pipette.channels > 1 ? "front nozzle (closest to you)" : "nozzle";
   const choice = await showPrompt({
     eyebrow: CAL_FLOW_TITLES[session.flowKey],
     title: "Did pipette pick up tip successfully?",
-    body: `<canvas class="prompt-canvas" aria-label="The pipette's front nozzle after pick-up"></canvas><p>Look at the ${session.pipette.channels > 1 ? "front nozzle (closest to you)" : "nozzle"}: the tip should be on straight and pressed fully onto it.</p>${miss}`,
+    body: session.live
+      ? `<p>Look at the pipette on the robot: the tip should be on the ${nozzle}, straight and pressed fully on.</p>`
+      : `<canvas class="prompt-canvas" aria-label="The pipette's front nozzle after pick-up"></canvas><p>Look at the ${nozzle}: the tip should be on straight and pressed fully onto it.</p>${miss}`,
     actions: [{ label: "Try again", value: "retry" }, { label: `Yes, move to ${destination}`, value: "yes", kind: "primary" }],
-    onOpen: (dialog) => drawTipInspection(dialog.querySelector(".prompt-canvas"), session)
+    onOpen: session.live ? null : (dialog) => drawTipInspection(dialog.querySelector(".prompt-canvas"), session)
   });
   if (choice === "retry") await calSend({ command: CAL_CMD.invalidateTip });
   else if (choice === "yes") await calSend({ command: calTipMoveCommand(session) });
@@ -315,22 +385,28 @@ async function calTipLengthCompletePrompt(session) {
   await showPrompt({
     eyebrow: CAL_FLOW_TITLES[session.flowKey],
     title: "Tip length calibration complete",
-    body: `<p>Saved tip length: <strong>${session.saved.tipLength.toFixed(2)} mm</strong>.</p>${session.usesBlock ? "<p>You can remove the Calibration Block from the deck now.</p>" : ""}<p>Next, pipette offset: the pipette moves to slot 5.</p>`,
+    body: `${session.saved.tipLength !== undefined ? `<p>Saved tip length: <strong>${session.saved.tipLength.toFixed(2)} mm</strong>.</p>` : "<p>Tip length is saved.</p>"}${session.usesBlock ? "<p>You can remove the Calibration Block from the deck now.</p>" : ""}<p>Next, pipette offset: the pipette moves to slot 5.</p>`,
     actions: [{ label: "Continue to pipette offset", value: "go", kind: "primary" }]
   });
   if (calUI.session === session) await calSend({ command: CAL_CMD.moveToDeck });
 }
 
 async function calCompletePrompt(session) {
-  const cal = calUI.robot.calibration;
+  const robot = calRobot();
+  if (session.live) {
+    try { await robot.refresh(); } catch (error) { calNotice(error.message, true); }
+  }
+  const cal = robot.calibration;
+  const tip = cal.tipLength[session.mount];
+  const saved = cal.pipetteOffset[session.mount];
   let body = "";
   if (session.sessionType === "deckCalibration") {
     body = `<p>The deck’s position relative to the gantry is saved. Pipette offset calibrations were cleared, so calibrate each pipette’s offset next.</p>`;
-    if (calUI.showOffsets) body += `<p class="prompt-aid">Training aid: measured deck offset X ${calSigned(cal.deck.offset.x)} · Y ${calSigned(cal.deck.offset.y)} mm.</p>`;
+    if (calUI.showOffsets && !session.live) body += `<p class="prompt-aid">Training aid: measured deck offset X ${calSigned(cal.deck.offset.x)} · Y ${calSigned(cal.deck.offset.y)} mm.</p>`;
   } else if (session.sessionType === "tipLengthCalibration") {
-    body = `<p>Saved tip length: <strong>${cal.tipLength[session.mount].value.toFixed(2)} mm</strong>.</p>${session.usesBlock ? "<p>You can remove the Calibration Block from the deck now.</p>" : ""}<p>This pipette’s offset was cleared; recalibrate it next.</p>`;
-  } else {
-    const offset = cal.pipetteOffset[session.mount].offset;
+    body = `${tip ? `<p>Saved tip length: <strong>${tip.value.toFixed(2)} mm</strong>.</p>` : ""}${session.usesBlock ? "<p>You can remove the Calibration Block from the deck now.</p>" : ""}<p>Recalibrate this pipette’s offset next.</p>`;
+  } else if (saved) {
+    const offset = saved.offset;
     body = `<p>Saved pipette offset: <strong>X ${calSigned(offset.x)} · Y ${calSigned(offset.y)} · Z ${calSigned(offset.z)} mm</strong>.</p>`;
   }
   await showPrompt({
@@ -350,7 +426,7 @@ async function calReturnTipPrompt(session) {
   await showPrompt({
     eyebrow: `${CAL_FLOW_TITLES.calibrationCheck} · pipette ${session.rankIndex + 1} of ${session.ranks.length}`,
     title: "Return tip",
-    body: `<p>The pipette returns its tip to A1 of the tip rack.</p>${next ? `<p>Next: the ${escapeHtml(CAL_PIPETTES[calUI.robot.pipettes[next]].label)} on the ${next} mount.</p>` : ""}`,
+    body: `<p>The pipette returns its tip to A1 of the tip rack.</p>${next ? `<p>Next: the ${escapeHtml(calPipetteInfo(calRobot().pipettes[next]).label)} on the ${next} mount.</p>` : ""}`,
     actions: [{ label: last ? "Return tip and see calibration health check results" : "Return tip and continue to next pipette", value: "go", kind: "primary" }]
   });
   if (calUI.session !== session) return;
@@ -360,7 +436,7 @@ async function calReturnTipPrompt(session) {
 function calResultsHtml(results) {
   const redo = new Set();
   const sections = results.pipettes.map((pipette) => {
-    const label = CAL_PIPETTES[pipette.name].label;
+    const label = calPipetteInfo(pipette.name).label;
     const map = results.comparisonsByPipette[pipette.rank];
     const rows = [["tipLength", "Tip length"], ["pipetteOffset", "Pipette offset"], ["deck", "Deck"]].filter(([key]) => map[key]).map(([key, name]) => {
       const entry = map[key];
@@ -392,9 +468,8 @@ async function calResultsPrompt(session) {
 
 async function calCrashPrompt(session, depth = 0) {
   const canRestart = session.canExecute(CAL_CMD.invalidateLastAction);
-  const physical = session.physical();
-  const part = physical.tipEnd ? "tip" : "nozzle";
-  const body = (depth ? `<p>The ${part} pressed ${depth.toFixed(1)} mm into the ${escapeHtml(physical.surface.name)}. On a robot this bends the tip or pushes labware out of place.</p>` : "")
+  const physical = depth ? session.physical() : null;
+  const body = (depth ? `<p>The ${physical.tipEnd ? "tip" : "nozzle"} pressed ${depth.toFixed(1)} mm into the ${escapeHtml(physical.surface.name)}. On a robot this bends the tip or pushes labware out of place.</p>` : "")
     + (canRestart
       ? "<p>Starting over will cancel your calibration progress. If you bent a tip, be sure to replace it with an undamaged tip in position A1 of the tip rack before resuming calibration.</p>"
       : "<p>Jog the pipette back up to continue.</p>");
@@ -417,6 +492,9 @@ function calStepView(session) {
   const surface = block ? "block" : "trash bin";
   const onSurface = block ? `the block in slot ${blockSlot}` : "the flat surface of the trash bin";
   const command = (...names) => names.map((name) => ({ command: name }));
+  // robot-server's health check records the operator's answer on each jog (the slot 5 height
+  // only then); a zero jog records the current position when the operator did not jog.
+  const check = (...names) => [{ command: CAL_CMD.jog, data: { vector: [0, 0, 0] } }, ...command(...names)];
   const slot = CAL_POINT_SLOTS[step];
   const views = {
     labwareLoaded: { kicker: "Deck setup", title: "Prepare the deck", body: "Clear the deck and load the tip rack" + (block ? " and Calibration Block" : "") + ".", actions: [{ label: "Show deck setup", run: calDeckSetupPrompt, kind: "primary" }] },
@@ -434,7 +512,7 @@ function calStepView(session) {
     comparingNozzle: {
       kicker: "Nozzle height", title: `Check z-axis on ${surface}`, jog: true,
       body: `Jog the pipette until the nozzle is barely touching (less than 0.1 mm) ${onSurface}.`,
-      actions: [{ label: "Check z-axis", commands: command(CAL_CMD.moveToTipRack), kind: "primary" }]
+      actions: [{ label: "Check z-axis", commands: check(CAL_CMD.moveToTipRack), kind: "primary" }]
     },
     measuringTipOffset: {
       kicker: "Tip height", title: `Calibrate tip on ${surface}`, jog: true,
@@ -444,7 +522,7 @@ function calStepView(session) {
     comparingTip: {
       kicker: "Tip height", title: `Check tip on ${surface}`, jog: true,
       body: `Jog the pipette until the tip is barely touching (less than 0.1 mm) ${onSurface}.`,
-      actions: [{ label: "Check tip length", commands: command(CAL_CMD.comparePoint, CAL_CMD.moveToDeck), kind: "primary" }]
+      actions: [{ label: "Check tip length", commands: check(CAL_CMD.comparePoint, CAL_CMD.moveToDeck), kind: "primary" }]
     },
     tipLengthComplete: { kicker: "Tip height", title: "Tip length calibration complete", body: "Continue to pipette offset calibration.", actions: [{ label: "Continue", run: calTipLengthCompletePrompt, kind: "primary" }] },
     joggingToDeck: {
@@ -455,24 +533,24 @@ function calStepView(session) {
     comparingHeight: {
       kicker: "Z · slot 5", title: "Check z-axis on slot 5", jog: true,
       body: "Jog the pipette until the tip is barely touching (less than 0.1 mm) the deck in slot 5.",
-      actions: [{ label: "Check z-axis and move to slot 1", commands: command(CAL_CMD.comparePoint, CAL_CMD.moveToPointOne), kind: "primary" }]
+      actions: [{ label: "Check z-axis and move to slot 1", commands: check(CAL_CMD.comparePoint, CAL_CMD.moveToPointOne), kind: "primary" }]
     },
     calibrationComplete: { kicker: "Done", title: `${CAL_FLOW_TITLES[session.flowKey]} complete`, body: "Return the tip and exit.", actions: [{ label: "Finish", run: calCompletePrompt, kind: "primary" }] },
     returningTip: { kicker: "Return tip", title: "Return tip", body: "Return the tip to the tip rack.", actions: [{ label: "Return tip", run: calReturnTipPrompt, kind: "primary" }] },
     resultsSummary: { kicker: "Results", title: "Calibration Health Check results", body: "Review the results.", actions: [{ label: "Show results", run: calResultsPrompt, kind: "primary" }] }
   };
   if (slot) {
-    const check = step.startsWith("comparing");
-    const save = check ? CAL_CMD.comparePoint : CAL_CMD.saveOffset;
+    const checking = step.startsWith("comparing");
+    const save = checking ? CAL_CMD.comparePoint : CAL_CMD.saveOffset;
     let next = [];
-    let label = check ? "Check x- and y-axis" : "Save calibration";
-    if (step.endsWith("One") && session.canExecute(CAL_CMD.moveToPointTwo) && !(check && session.checkingBothPipettes && session.rank === "first")) { next = [CAL_CMD.moveToPointTwo]; label += " and move to slot 3"; }
+    let label = checking ? "Check x- and y-axis" : "Save calibration";
+    if (step.endsWith("One") && session.canExecute(CAL_CMD.moveToPointTwo) && !(checking && session.checkingBothPipettes && session.rank === "first")) { next = [CAL_CMD.moveToPointTwo]; label += " and move to slot 3"; }
     else if (step.endsWith("Two")) { next = [CAL_CMD.moveToPointThree]; label += " and move to slot 7"; }
-    else if (step.endsWith("Three") || check) next = [CAL_CMD.moveToTipRack];
+    else if (step.endsWith("Three") || checking) next = [CAL_CMD.moveToTipRack];
     return {
-      kicker: `Slot ${slot}`, title: `${check ? "Check" : "Calibrate"} x- and y-axis in slot ${slot}`, jog: true,
+      kicker: `Slot ${slot}`, title: `${checking ? "Check" : "Calibrate"} x- and y-axis in slot ${slot}`, jog: true,
       body: `Jog the pipette until the tip is precisely centered above the cross in slot ${slot}.`,
-      actions: [{ label, commands: command(save, ...next), kind: "primary" }]
+      actions: [{ label, commands: checking ? check(save, ...next) : command(save, ...next), kind: "primary" }]
     };
   }
   return views[step] || { kicker: "", title: calStepName(step), body: "", actions: [] };
@@ -480,13 +558,20 @@ function calStepView(session) {
 
 function renderCalStep() {
   const session = calUI.session;
+  const busy = calUI.busy;
+  const live = calUI.mode === "live";
+  $("#cal-deck-kicker").textContent = live ? "Live OT-2 · labware and targets" : "Practice robot";
+  $("#cal-closeup-kicker").textContent = live ? "Live OT-2" : "What you would see at the robot";
+  $("#cal-closeup-title").textContent = live ? "AT THE ROBOT" : "ALIGNMENT CLOSE-UP";
+  $("#cal-telemetry").hidden = live;
   $("#cal-empty").hidden = Boolean(session);
   $("#cal-exit").hidden = !session;
-  document.querySelectorAll(".jog-pad button[data-jog]").forEach((button) => { button.disabled = !session || !session.canExecute(CAL_CMD.jog); });
+  $("#cal-exit").disabled = busy;
+  document.querySelectorAll(".jog-pad button[data-jog]").forEach((button) => { button.disabled = busy || !session || !session.canExecute(CAL_CMD.jog); });
   if (!session) {
-    $("#cal-flow-kicker").textContent = "Practice mode · simulated OT-2";
+    $("#cal-flow-kicker").textContent = calUI.mode === "live" ? calModeLabel() : "Practice mode · simulated OT-2";
+    $("#cal-step-chip").textContent = busy ? "Starting…" : "Idle";
     $("#cal-flow-title").textContent = "Choose a calibration";
-    $("#cal-step-chip").textContent = "Idle";
     $("#cal-progress").innerHTML = "";
     $("#cal-step-kicker").textContent = "—";
     $("#cal-step-title").textContent = "No calibration running";
@@ -498,9 +583,10 @@ function renderCalStep() {
   }
   const view = calStepView(session);
   const pipette = `${session.pipette.label} · ${session.mount} mount`;
-  $("#cal-flow-kicker").textContent = session.ranks ? `Practice robot · pipette ${session.rankIndex + 1} of ${session.ranks.length} · ${pipette}` : `Practice robot · ${pipette}`;
+  $("#cal-flow-kicker").textContent = session.ranks ? `${calModeLabel()} · pipette ${session.rankIndex + 1} of ${session.ranks.length} · ${pipette}` : `${calModeLabel()} · ${pipette}`;
   $("#cal-flow-title").textContent = CAL_FLOW_TITLES[session.flowKey];
-  $("#cal-step-chip").textContent = calStepName(session.currentStep);
+  $("#cal-step-chip").textContent = busy && session.live ? "Robot moving…" : calStepName(session.currentStep);
+  $("#cal-step-chip").classList.toggle("moving", busy && Boolean(session.live));
   const milestones = CAL_MILESTONES[session.flowKey];
   const current = milestones.findIndex(([, states]) => states.includes(session.currentStep));
   $("#cal-progress").innerHTML = milestones.map(([label], i) => `<li class="${i < current ? "done" : i === current ? "active" : ""}">${escapeHtml(label)}</li>`).join("");
@@ -508,7 +594,7 @@ function renderCalStep() {
   $("#cal-step-title").textContent = view.title;
   $("#cal-step-body").textContent = view.body;
   calUI.actions = view.actions;
-  $("#cal-step-actions").innerHTML = view.actions.map((action, i) => `<button type="button" class="${action.kind === "primary" ? "primary-button" : "secondary-button"}" data-cal-action="${i}">${escapeHtml(action.label)}</button>`).join("");
+  $("#cal-step-actions").innerHTML = view.actions.map((action, i) => `<button type="button" class="${action.kind === "primary" ? "primary-button" : "secondary-button"}" data-cal-action="${i}"${busy ? " disabled" : ""}>${escapeHtml(action.label)}</button>`).join("");
   $("#cal-crash").hidden = !view.jog || !session.canExecute(CAL_CMD.invalidateLastAction);
   const target = session.target();
   $("#cal-target-label").textContent = target ? target.label : "—";
@@ -516,7 +602,7 @@ function renderCalStep() {
 
 function calJog(axis, direction) {
   const session = calUI.session;
-  if (!session || !session.canExecute(CAL_CMD.jog)) return;
+  if (!session || calUI.busy || !session.canExecute(CAL_CMD.jog)) return;
   const vector = [0, 0, 0];
   vector["xyz".indexOf(axis)] = direction * calUI.stepSize;
   calSend({ command: CAL_CMD.jog, data: { vector } });
@@ -629,6 +715,18 @@ function drawCalCloseup(canvas, session, nozzle) {
   const ctx = canvas.getContext("2d");
   const size = fitCanvas(canvas, ctx);
   ctx.clearRect(0, 0, size.width, size.height);
+  if (session && session.live) {
+    $("#cal-aid").hidden = true;
+    const target = session.target();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f3e9f5"; ctx.font = "700 15px system-ui";
+    ctx.fillText("Watch the pipette on the robot", size.width / 2, size.height / 2 - 14);
+    ctx.fillStyle = "#a68fad"; ctx.font = "600 11px system-ui";
+    ctx.fillText(target ? `Target: ${target.label}` : "No alignment target at this step", size.width / 2, size.height / 2 + 10);
+    ctx.fillText("The OT-2 has no camera; align by eye, looking from the front and the side.", size.width / 2, size.height / 2 + 30);
+    ctx.textAlign = "left";
+    return;
+  }
   if (!session || !nozzle) {
     $("#cal-aid").hidden = true;
     ctx.fillStyle = "#a68fad"; ctx.font = "600 12px system-ui"; ctx.textAlign = "center";
@@ -830,12 +928,55 @@ function drawTipInspection(canvas, session) {
 // ------------------------------------------------------------ events
 
 $("#open-calibration").addEventListener("click", () => routeTo("calibration"));
+document.querySelectorAll(".cal-mode button").forEach((button) => button.addEventListener("click", () => {
+  if (calUI.session) return;
+  calUI.mode = button.dataset.mode;
+  calNotice(calUI.mode === "live" && !calUI.liveRobot ? "Enter the robot’s address and the upload PIN, then connect." : "");
+  renderCalPanel();
+  renderCalStep();
+  calUI.dirty = true;
+}));
+
+function calLiveRequest(op, payload = {}) {
+  return apiFetch("./api/ot2/calibration", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op, robotAddress: $("#cal-robot-address").value.trim(), pin: $("#cal-robot-pin").value, ...payload })
+  }).then(async (response) => {
+    let body;
+    try { body = await response.json(); } catch (_error) { throw new Error(`The server returned an unreadable response (${response.status}).`); }
+    if (!response.ok) throw new Error(body.error || `Live calibration failed (${response.status}).`);
+    return body;
+  });
+}
+
+$("#cal-live-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#cal-connect");
+  button.disabled = true; button.textContent = "Connecting…";
+  try {
+    const robot = new LiveRobot(calLiveRequest);
+    await robot.refresh();
+    calUI.liveRobot = robot;
+    calNotice(`Connected to ${robot.name} (robot software ${robot.softwareVersion}).`);
+  } catch (error) {
+    calNotice(error.message, true);
+  } finally {
+    button.disabled = false; button.textContent = calUI.liveRobot ? "Reconnect" : "Connect";
+  }
+  renderCalPanel();
+  renderCalStep();
+});
+// Leaving mid-session would leave the robot holding a tip in an open session.
+window.addEventListener("beforeunload", (event) => {
+  if (calUI.session && calUI.session.live) event.preventDefault();
+});
 $("#cal-status").addEventListener("click", (event) => {
   const button = event.target.closest("[data-cal]");
   if (button && !button.disabled) startCalibration(button.dataset.cal, button.dataset.mount);
 });
 ["left", "right"].forEach((mount) => $(`#cal-${mount}-pipette`).addEventListener("change", (event) => {
-  calUI.robot.setPipette(mount, event.target.value);
+  calUI.practiceRobot.setPipette(mount, event.target.value);
   calNotice("");
   renderCalPanel();
   calUI.dirty = true;
@@ -850,7 +991,7 @@ $("#cal-new-robot").addEventListener("click", async () => {
     cancel: "cancel"
   });
   if (choice !== "new") return;
-  calUI.robot.reset();
+  calUI.practiceRobot.reset();
   calNotice("New practice robot. Start with deck calibration.");
   renderCalPanel();
   calUI.dirty = true;
@@ -869,6 +1010,7 @@ document.querySelectorAll(".jog-pad button[data-jog]").forEach((button) => butto
 document.querySelectorAll(".jog-steps button").forEach((button) => button.addEventListener("click", () => setCalStepSize(Number(button.dataset.step))));
 document.addEventListener("keydown", (event) => {
   if ($("#cal-screen").hidden || $("#prompt-dialog").open || !calUI.session) return;
+  if (calUI.busy) { if (event.key.startsWith("Arrow")) event.preventDefault(); return; }
   if (event.target.closest("input, select, textarea") || event.metaKey || event.ctrlKey || event.altKey) return;
   const key = event.key;
   if (key === "ArrowLeft") calJog("x", -1);

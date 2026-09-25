@@ -1,0 +1,86 @@
+{
+ "schemaVersion": 2,
+ "version": 1,
+ "namespace": "opentrons",
+ "metadata": {
+  "displayName": "Opentrons Calibration Block - Short Side: Left",
+  "displayCategory": "aluminumBlock",
+  "displayVolumeUnits": "mL",
+  "tags": []
+ },
+ "brand": {
+  "brand": "Opentrons",
+  "brandId": [],
+  "links": []
+ },
+ "parameters": {
+  "format": "irregular",
+  "isTiprack": false,
+  "loadName": "opentrons_calibrationblock_short_side_left",
+  "isMagneticModuleCompatible": false
+ },
+ "cornerOffsetFromSlot": {
+  "x": 0,
+  "y": 0,
+  "z": 0
+ },
+ "ordering": [
+  [
+   "A1"
+  ],
+  [
+   "A2"
+  ]
+ ],
+ "dimensions": {
+  "yDimension": 85.5,
+  "zDimension": 62.5,
+  "xDimension": 127.75
+ },
+ "wells": {
+  "A1": {
+   "shape": "rectangular",
+   "xDimension": 63.88,
+   "yDimension": 85.5,
+   "depth": 0,
+   "totalLiquidVolume": 0,
+   "x": 31.94,
+   "z": 33,
+   "y": 42.75
+  },
+  "A2": {
+   "shape": "rectangular",
+   "xDimension": 63.88,
+   "yDimension": 85.5,
+   "depth": 0,
+   "totalLiquidVolume": 0,
+   "x": 95.81,
+   "z": 62.5,
+   "y": 42.75
+  }
+ },
+ "groups": [
+  {
+   "wells": [
+    "A1"
+   ],
+   "metadata": {
+    "displayName": "Opentrons Calibration Block - Short Side",
+    "wellBottomShape": "flat"
+   }
+  },
+  {
+   "wells": [
+    "A2"
+   ],
+   "metadata": {
+    "displayName": "Opentrons Calibration Block - Tall Side",
+    "wellBottomShape": "flat"
+   }
+  }
+ ],
+ "stackingOffsetWithLabware": {},
+ "stackingOffsetWithModule": {},
+ "allowedRoles": [],
+ "gripperOffsets": {}
+}

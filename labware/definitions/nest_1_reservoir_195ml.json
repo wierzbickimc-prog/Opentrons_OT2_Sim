@@ -1,0 +1,103 @@
+{
+ "schemaVersion": 2,
+ "version": 5,
+ "namespace": "opentrons",
+ "metadata": {
+  "displayName": "NEST 1 Well Reservoir 195 mL",
+  "displayCategory": "reservoir",
+  "displayVolumeUnits": "mL",
+  "tags": []
+ },
+ "brand": {
+  "brand": "NEST",
+  "brandId": [
+   "360103"
+  ],
+  "links": [
+   "https://www.nest-biotech.com/reagent-reserviors/59178416.html"
+  ]
+ },
+ "parameters": {
+  "format": "trough",
+  "quirks": [
+   "centerMultichannelOnWells",
+   "touchTipDisabled",
+   "offsetPipetteFor96GridSubwells"
+  ],
+  "isTiprack": false,
+  "loadName": "nest_1_reservoir_195ml",
+  "isMagneticModuleCompatible": false
+ },
+ "cornerOffsetFromSlot": {
+  "x": 0,
+  "y": 0,
+  "z": 0
+ },
+ "ordering": [
+  [
+   "A1"
+  ]
+ ],
+ "dimensions": {
+  "yDimension": 85.48,
+  "zDimension": 31.4,
+  "xDimension": 127.76
+ },
+ "wells": {
+  "A1": {
+   "shape": "rectangular",
+   "xDimension": 107.3,
+   "yDimension": 71.3,
+   "depth": 26.85,
+   "totalLiquidVolume": 195000,
+   "x": 63.88,
+   "z": 4.55,
+   "geometryDefinitionId": "cuboidalWell",
+   "y": 42.74
+  }
+ },
+ "groups": [
+  {
+   "wells": [
+    "A1"
+   ],
+   "metadata": {
+    "wellBottomShape": "v"
+   }
+  }
+ ],
+ "stackingOffsetWithLabware": {},
+ "stackingOffsetWithModule": {},
+ "allowedRoles": [],
+ "gripperOffsets": {},
+ "gripForce": 15.0,
+ "gripHeightFromLabwareBottom": 16.8,
+ "innerLabwareGeometry": {
+  "cuboidalWell": {
+   "sections": [
+    {
+     "shape": "cuboidal",
+     "bottomXDimension": 106.8,
+     "bottomYDimension": 70.6,
+     "topXDimension": 107.3,
+     "topYDimension": 71.3,
+     "topHeight": 26.85,
+     "bottomHeight": 2.0,
+     "xCount": 1,
+     "yCount": 1
+    },
+    {
+     "shape": "cuboidal",
+     "bottomXDimension": 1.93,
+     "bottomYDimension": 1.93,
+     "topXDimension": 9,
+     "topYDimension": 9,
+     "topHeight": 2,
+     "bottomHeight": 0,
+     "xCount": 12,
+     "yCount": 8
+    }
+   ]
+  }
+ }
+}

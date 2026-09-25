@@ -229,3 +229,131 @@ class SimulationEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveCalibrationProxyTests(unittest.TestCase):
+    """The live-calibration proxy against a fake robot-server that records every request."""
+
+    SESSION = "5cf76890-f47b-443b-9fc2-3e41de7cb279"
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+        calls = cls.calls = []
+        session = cls.SESSION
+
+        class FakeRobot(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def reply(self, status, value):
+                body = json.dumps(value).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def handle_any(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length)) if length else None
+                calls.append((self.command, self.path, body, self.headers.get("Opentrons-Version")))
+                if self.path.endswith("/commands/execute") and body["data"]["command"] == "calibration.pickUpTip":
+                    self.reply(409, {"errors": [{"title": "Illegal State Transition", "detail": "The action calibration.pickUpTip may not occur in the state sessionStarted"}]})
+                elif self.path == "/sessions" and self.command == "POST":
+                    self.reply(201, {"data": {"id": session, "sessionType": body["data"]["sessionType"], "details": {"currentStep": "sessionStarted"}}})
+                elif self.path == "/sessions":
+                    self.reply(200, {"data": [{"id": session, "sessionType": "deckCalibration", "details": {}}]})
+                elif self.path.startswith("/sessions/"):
+                    self.reply(200, {"data": {"id": session, "details": {"currentStep": "labwareLoaded"}}})
+                elif self.path in ("/calibration/pipette_offset", "/calibration/tip_length"):
+                    self.reply(200, {"data": []})
+                else:
+                    self.reply(200, {"name": "fake"})
+
+            do_GET = do_POST = do_DELETE = handle_any
+
+        cls.robot = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeRobot)
+        threading.Thread(target=cls.robot.serve_forever, daemon=True).start()
+        cls.app = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.ApplicationHandler)
+        threading.Thread(target=cls.app.serve_forever, daemon=True).start()
+        cls.patches = [
+            mock.patch.dict(os.environ, {"OT2_UPLOAD_PIN": "4321"}),
+            mock.patch.object(server, "ROBOT_PORT", cls.robot.server_address[1]),
+            mock.patch.object(server.ApplicationHandler, "validate_robot", lambda self, address: "127.0.0.1"),
+        ]
+        for patch in cls.patches:
+            patch.start()
+        os.environ.pop("OT2_SITE_PASSWORD", None)
+
+    @classmethod
+    def tearDownClass(cls):
+        for patch in reversed(cls.patches):
+            patch.stop()
+        for httpd in (cls.app, cls.robot):
+            httpd.shutdown()
+            httpd.server_close()
+
+    def setUp(self):
+        self.calls.clear()
+
+    def post(self, **fields):
+        import urllib.request
+        body = json.dumps({"robotAddress": "192.168.1.42", "pin": "4321", **fields}).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{self.app.server_address[1]}/api/ot2/calibration", data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_wrong_pin_never_reaches_the_robot(self):
+        status, body = self.post(op="status", pin="0000")
+        self.assertEqual((status, body["error"]), (403, "Incorrect PIN."))
+        self.assertEqual(self.calls, [])
+
+    def test_only_calibration_sessions_commands_and_small_jogs_are_relayed(self):
+        for fields in (
+            {"op": "create", "sessionType": "protocol"},
+            {"op": "create", "sessionType": "tipLengthCalibration", "createParams": {"mount": "middle"}},
+            {"op": "command", "sessionId": self.SESSION, "command": "robot.homeAllMotors"},
+            {"op": "command", "sessionId": self.SESSION, "command": "calibration.jog", "data": {"vector": [0, 0, -10.5]}},
+            {"op": "command", "sessionId": self.SESSION, "command": "calibration.jog", "data": {"vector": [0, True, 0]}},
+            {"op": "command", "sessionId": "../../robot/home", "command": "calibration.saveOffset"},
+            {"op": "reboot"},
+        ):
+            status, _body = self.post(**fields)
+            self.assertEqual(status, 400, fields)
+        self.assertEqual(self.calls, [])
+
+    def test_jog_is_relayed_and_returns_the_new_session_state(self):
+        status, body = self.post(op="command", sessionId=self.SESSION, command="calibration.jog", data={"vector": [0, 0, -0.1], "extra": 1})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["details"]["currentStep"], "labwareLoaded")
+        method, path, sent, version = self.calls[0]
+        self.assertEqual((method, path, version), ("POST", f"/sessions/{self.SESSION}/commands/execute", "*"))
+        self.assertEqual(sent, {"data": {"command": "calibration.jog", "data": {"vector": [0.0, 0.0, -0.1]}}})
+        self.assertEqual(self.calls[1][:2], ("GET", f"/sessions/{self.SESSION}"))
+
+    def test_exit_returns_the_tip_then_deletes_the_session(self):
+        status, body = self.post(op="command", sessionId=self.SESSION, command="calibration.exitSession")
+        self.assertEqual((status, body["details"]["currentStep"]), (200, "sessionExited"))
+        self.assertEqual([call[:2] for call in self.calls], [("POST", f"/sessions/{self.SESSION}/commands/execute"), ("DELETE", f"/sessions/{self.SESSION}")])
+
+    def test_robot_refusals_keep_their_status_and_reason(self):
+        status, body = self.post(op="command", sessionId=self.SESSION, command="calibration.pickUpTip")
+        self.assertEqual(status, 409)
+        self.assertIn("may not occur in the state sessionStarted", body["error"])
+
+    def test_create_sends_only_the_settings_each_flow_takes(self):
+        self.post(op="create", sessionType="deckCalibration", createParams={"mount": "left", "hasCalibrationBlock": True})
+        self.post(op="create", sessionType="pipetteOffsetCalibration", createParams={"mount": "right", "hasCalibrationBlock": "yes", "tipRackDefinition": {}})
+        self.assertEqual(self.calls[0][2], {"data": {"sessionType": "deckCalibration"}})
+        self.assertEqual(self.calls[1][2], {"data": {"sessionType": "pipetteOffsetCalibration", "createParams": {"hasCalibrationBlock": False, "mount": "right", "shouldRecalibrateTipLength": False}}})
+
+    def test_status_collects_pipettes_calibrations_and_open_sessions(self):
+        status, body = self.post(op="status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["sessions"], [{"id": self.SESSION, "sessionType": "deckCalibration"}])
+        self.assertEqual(sorted(call[1] for call in self.calls), ["/calibration/pipette_offset", "/calibration/status", "/calibration/tip_length", "/health", "/pipettes", "/sessions"])

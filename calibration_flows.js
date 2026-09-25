@@ -8,8 +8,10 @@
 //
 // PracticeRobot stands in for the robot. Its deck, pipette mounts, and tips
 // differ from nominal by hidden amounts; calibrations measure those amounts
-// from where the operator jogs, exactly as the real flows do. Geometry is in
-// deck millimeters (+X right, +Y back, +Z up) from Opentrons definitions.
+// from where the operator jogs, exactly as the real flows do. LiveRobot sends
+// the same commands to an OT-2 through server.py's /api/ot2/calibration.
+// Geometry is in deck millimeters (+X right, +Y back, +Z up) from Opentrons
+// definitions.
 
 const CAL_CMD = {
   loadLabware: "calibration.loadLabware",
@@ -200,6 +202,48 @@ function calThreshold(pipette, step) {
   return pipette.family === "p1000" ? CAL_TOLERANCES.p1000_height : CAL_TOLERANCES.other_height;
 }
 
+// What the operator aligns to at a session's current step, in physical deck coordinates.
+function calTarget(session) {
+  const step = session.currentStep;
+  if (step === "preparingPipette" || step === "inspectingTip") {
+    const a1 = calTipRackA1();
+    return { kind: "tip", x: a1.x, y: a1.y, z: session.tipRack.top, label: "Tip rack A1" };
+  }
+  if (["measuringNozzleOffset", "measuringTipOffset", "comparingNozzle", "comparingTip"].includes(step)) {
+    const ref = calReferencePoint(session);
+    return { kind: "surface", x: ref.x, y: ref.y, z: ref.z, label: session.usesBlock ? `Calibration Block · slot ${CAL_BLOCKS[session.blockKey].slot}` : "Trash bin" };
+  }
+  if (step === "joggingToDeck" || step === "comparingHeight") {
+    return { kind: "surface", x: CAL_DECK_TARGET.x, y: CAL_DECK_TARGET.y, z: 0, label: "Deck · slot 5" };
+  }
+  const point = { savingPointOne: "1BLC", savingPointTwo: "3BRC", savingPointThree: "7TLC", comparingPointOne: "1BLC", comparingPointTwo: "3BRC", comparingPointThree: "7TLC" }[step];
+  if (point) return { kind: "cross", x: CAL_POINTS[point].x, y: CAL_POINTS[point].y, z: 0, label: `Cross · slot ${CAL_POINTS[point].slot}`, point };
+  return null;
+}
+
+function calReferencePoint(session) {
+  return session.usesBlock ? calBlockTarget(session.blockKey) : CAL_TRASH_REFERENCE;
+}
+
+// Flow details both session kinds derive the same way.
+const CAL_SESSION_GETTERS = {
+  flowKey: { get() { return this.withTipLength ? "pipetteOffsetWithTipLength" : this.sessionType; } },
+  pipette: { get() { return calPipetteInfo(this.pipetteName); } },
+  tipRack: { get() { return calTipRackInfo(this.tipRackKey); } },
+  rank: { get() { return this.rankIndex === 0 ? "first" : "second"; } },
+  usesBlock: { get() { return this.hasCalibrationBlock && this.sessionType !== "deckCalibration" && (this.sessionType !== "pipetteOffsetCalibration" || this.withTipLength); } },
+  blockKey: { get() { return this.sessionType === "calibrationCheck" ? "check" : this.mount; } },
+  checkingBothPipettes: { get() { return Boolean(this.ranks && this.ranks.length === 2); } }
+};
+
+function calCanExecute(session, command) {
+  if (command === CAL_CMD.exit) return true;
+  // robot-server allows starting over here, but once tip length is saved the restarted
+  // flow cannot leave inspectingTip; exiting and starting pipette offset again works.
+  if (command === CAL_CMD.invalidateLastAction && session.flowKey === "pipetteOffsetWithTipLength" && session.tipLengthSaved) return false;
+  return Boolean((CAL_TRANSITIONS[session.flowKey][session.currentStep] || {})[command]);
+}
+
 function calRandomTruth(random) {
   const r = (limit) => (random() * 2 - 1) * limit;
   let deck;
@@ -208,8 +252,64 @@ function calRandomTruth(random) {
   return { deck, pipette: { left: pipette(), right: pipette() }, tips: {} };
 }
 
-class PracticeRobot {
+// Pipette details for any pipette name, including ones the practice robot does not offer.
+function calPipetteInfo(name) {
+  if (CAL_PIPETTES[name]) return CAL_PIPETTES[name];
+  const volume = Number((/^p(\d+)/.exec(name || "") || [])[1]) || 300;
+  const family = volume <= 20 ? "p20" : volume >= 1000 ? "p1000" : "p300";
+  return { label: name || "Unknown pipette", family, channels: /multi/.test(name || "") ? 8 : 1, maxVolume: volume, tipRack: CAL_PIPETTES[`${family}_single_gen2`].tipRack };
+}
+
+function calTipRackInfo(loadName) {
+  return CAL_TIPRACKS[loadName] || { ...CAL_TIPRACKS.opentrons_96_tiprack_300ul, label: loadName || "Tip rack" };
+}
+
+// Which flows a robot can run, and in what order, from its pipettes and saved calibrations.
+class CalibrationRobot {
+  constructor() {
+    this.pipettes = { left: null, right: null };
+    this.calibration = { deck: null, tipLength: { left: null, right: null }, pipetteOffset: { left: null, right: null }, health: null };
+  }
+
+  attachedMounts() { return ["left", "right"].filter((mount) => this.pipettes[mount]); }
+
+  // Deck calibration's pipette: smaller max volume, then single-channel, then the right mount.
+  deckCalibrationMount() {
+    const mounts = this.attachedMounts();
+    if (mounts.length < 2) return mounts[0] || null;
+    const [l, r] = [calPipetteInfo(this.pipettes.left), calPipetteInfo(this.pipettes.right)];
+    if (l.maxVolume !== r.maxVolume) return l.maxVolume < r.maxVolume ? "left" : "right";
+    if (l.channels !== r.channels) return l.channels < r.channels ? "left" : "right";
+    return "right";
+  }
+
+  // Health check order: the larger (or single-channel) pipette is checked first.
+  checkOrder() {
+    const mounts = this.attachedMounts();
+    if (mounts.length < 2) return mounts;
+    const [l, r] = [calPipetteInfo(this.pipettes.left), calPipetteInfo(this.pipettes.right)];
+    return l.maxVolume > r.maxVolume || r.channels > l.channels ? ["left", "right"] : ["right", "left"];
+  }
+
+  // Why a flow cannot start yet, or null when it can.
+  readiness(sessionType, mount) {
+    const mounts = this.attachedMounts();
+    if (!mounts.length) return "Attach a pipette first.";
+    if (sessionType === "deckCalibration") return null;
+    if (sessionType === "calibrationCheck") {
+      if (!this.calibration.deck) return "Calibrate the deck first.";
+      const missing = mounts.find((m) => !this.calibration.tipLength[m] || !this.calibration.pipetteOffset[m]);
+      return missing ? `Calibrate tip length and pipette offset for the ${missing} pipette first.` : null;
+    }
+    if (!this.pipettes[mount]) return `No pipette on the ${mount} mount.`;
+    if (sessionType === "pipetteOffsetCalibration" && !this.calibration.deck) return "Calibrate the deck first.";
+    return null;
+  }
+}
+
+class PracticeRobot extends CalibrationRobot {
   constructor(pipettes = { left: "p20_multi_gen2", right: null }, random = Math.random) {
+    super();
     this.random = random;
     this.pipettes = { left: pipettes.left || null, right: pipettes.right || null };
     this.reset();
@@ -231,45 +331,10 @@ class PracticeRobot {
     this.calibration.health = null;
   }
 
-  attachedMounts() { return ["left", "right"].filter((mount) => this.pipettes[mount]); }
-
   trueTipLength(mount, rackKey) {
     const key = `${mount}|${rackKey}`;
     if (this.truth.tips[key] === undefined) this.truth.tips[key] = calNominalTipLength(rackKey) + (this.random() * 2 - 1) * 0.7;
     return this.truth.tips[key];
-  }
-
-  // Deck calibration's pipette: smaller max volume, then single-channel, then the right mount.
-  deckCalibrationMount() {
-    const mounts = this.attachedMounts();
-    if (mounts.length < 2) return mounts[0] || null;
-    const [l, r] = [CAL_PIPETTES[this.pipettes.left], CAL_PIPETTES[this.pipettes.right]];
-    if (l.maxVolume !== r.maxVolume) return l.maxVolume < r.maxVolume ? "left" : "right";
-    if (l.channels !== r.channels) return l.channels < r.channels ? "left" : "right";
-    return "right";
-  }
-
-  // Health check order: the larger (or single-channel) pipette is checked first.
-  checkOrder() {
-    const mounts = this.attachedMounts();
-    if (mounts.length < 2) return mounts;
-    const [l, r] = [CAL_PIPETTES[this.pipettes.left], CAL_PIPETTES[this.pipettes.right]];
-    return l.maxVolume > r.maxVolume || r.channels > l.channels ? ["left", "right"] : ["right", "left"];
-  }
-
-  // Why a flow cannot start yet, or null when it can.
-  readiness(sessionType, mount) {
-    const mounts = this.attachedMounts();
-    if (!mounts.length) return "Attach a pipette first.";
-    if (sessionType === "deckCalibration") return null;
-    if (sessionType === "calibrationCheck") {
-      if (!this.calibration.deck) return "Calibrate the deck first.";
-      const missing = mounts.find((m) => !this.calibration.tipLength[m] || !this.calibration.pipetteOffset[m]);
-      return missing ? `Calibrate tip length and pipette offset for the ${missing} pipette first.` : null;
-    }
-    if (!this.pipettes[mount]) return `No pipette on the ${mount} mount.`;
-    if (sessionType === "pipetteOffsetCalibration" && !this.calibration.deck) return "Calibrate the deck first.";
-    return null;
   }
 
   createSession(sessionType, params = {}) {
@@ -304,21 +369,15 @@ class PracticeSession {
     this.results = null;
   }
 
-  get flowKey() { return this.withTipLength ? "pipetteOffsetWithTipLength" : this.sessionType; }
   get pipetteName() { return this.robot.pipettes[this.mount]; }
-  get pipette() { return CAL_PIPETTES[this.pipetteName]; }
   get tipRackKey() { return this.pipette.tipRack; }
-  get tipRack() { return CAL_TIPRACKS[this.tipRackKey]; }
-  get rank() { return this.rankIndex === 0 ? "first" : "second"; }
-  get usesBlock() { return this.hasCalibrationBlock && this.sessionType !== "deckCalibration" && (this.sessionType !== "pipetteOffsetCalibration" || this.withTipLength); }
-  get blockKey() { return this.sessionType === "calibrationCheck" ? "check" : this.mount; }
-  get checkingBothPipettes() { return Boolean(this.ranks && this.ranks.length === 2); }
+  get tipLengthSaved() { return this.saved.tipLength !== undefined; }
 
   supportedCommands() {
     return [...Object.keys(this.transitions[this.currentStep] || {}), CAL_CMD.exit];
   }
 
-  canExecute(command) { return command === CAL_CMD.exit || Boolean((this.transitions[this.currentStep] || {})[command]); }
+  canExecute(command) { return calCanExecute(this, command); }
 
   // Like robot-server: handlers see the state the command was sent in, then the state advances.
   execute(command, data = {}) {
@@ -403,28 +462,8 @@ class PracticeSession {
     return Math.max(0, -physical.gap);
   }
 
-  referencePoint() {
-    return this.usesBlock ? calBlockTarget(this.blockKey) : CAL_TRASH_REFERENCE;
-  }
-
-  // What the operator aligns to at this step, in physical deck coordinates.
-  target() {
-    const step = this.currentStep;
-    if (step === "preparingPipette" || step === "inspectingTip") {
-      const a1 = calTipRackA1();
-      return { kind: "tip", x: a1.x, y: a1.y, z: this.tipRack.top, label: "Tip rack A1" };
-    }
-    if (["measuringNozzleOffset", "measuringTipOffset", "comparingNozzle", "comparingTip"].includes(step)) {
-      const ref = this.referencePoint();
-      return { kind: "surface", x: ref.x, y: ref.y, z: ref.z, label: this.usesBlock ? `Calibration Block · slot ${CAL_BLOCKS[this.blockKey].slot}` : "Trash bin" };
-    }
-    if (step === "joggingToDeck" || step === "comparingHeight") {
-      return { kind: "surface", x: CAL_DECK_TARGET.x, y: CAL_DECK_TARGET.y, z: 0, label: "Deck · slot 5" };
-    }
-    const point = { savingPointOne: "1BLC", savingPointTwo: "3BRC", savingPointThree: "7TLC", comparingPointOne: "1BLC", comparingPointTwo: "3BRC", comparingPointThree: "7TLC" }[step];
-    if (point) return { kind: "cross", x: CAL_POINTS[point].x, y: CAL_POINTS[point].y, z: 0, label: `Cross · slot ${CAL_POINTS[point].slot}`, point };
-    return null;
-  }
+  referencePoint() { return calReferencePoint(this); }
+  target() { return calTarget(this); }
 
   returnTip() {
     this.tip = null;
@@ -451,6 +490,8 @@ class PracticeSession {
     }
   }
 }
+
+Object.defineProperties(PracticeSession.prototype, CAL_SESSION_GETTERS);
 
 const PRACTICE_HANDLERS = {
   [CAL_CMD.loadLabware]() {
@@ -587,6 +628,139 @@ const PRACTICE_HANDLERS = {
   }
 };
 
+// A real OT-2. `request(op, payload)` performs one /api/ot2/calibration operation
+// (status, create, command, session, delete) and resolves with its JSON.
+class LiveRobot extends CalibrationRobot {
+  constructor(request) {
+    super();
+    this.live = true;
+    this.request = request;
+    this.name = "";
+    this.softwareVersion = "";
+    this.serials = { left: null, right: null };
+    this.sessions = [];
+  }
+
+  // Reads attached pipettes and saved calibrations the way the OT-2 App's calibration panel does.
+  async refresh() {
+    const status = await this.request("status");
+    const health = this.calibration.health;
+    this.name = status.health.name || "OT-2";
+    this.softwareVersion = status.health.api_version || "";
+    this.sessions = status.sessions || [];
+    const calibration = { deck: null, tipLength: { left: null, right: null }, pipetteOffset: { left: null, right: null }, health };
+    const deck = (status.calibration || {}).deckCalibration || {};
+    if (deck.status && deck.status !== "IDENTITY") {
+      const data = deck.data || {};
+      calibration.deck = { at: data.lastModified, bad: deck.status !== "OK" || Boolean(data.status && data.status.markedBad) };
+    }
+    for (const mount of ["left", "right"]) {
+      const pipette = (status.pipettes || {})[mount] || {};
+      this.pipettes[mount] = pipette.model ? pipette.name : null;
+      this.serials[mount] = pipette.id || null;
+      if (!pipette.model) continue;
+      const offset = (status.pipetteOffsets || []).find((item) => item.pipette === pipette.id && String(item.mount).toLowerCase() === mount);
+      if (offset) {
+        const [x, y, z] = offset.offset;
+        calibration.pipetteOffset[mount] = { offset: { x, y, z }, at: offset.lastModified, bad: Boolean(offset.status && offset.status.markedBad) };
+      }
+      const rack = calPipetteInfo(pipette.name).tipRack;
+      const tips = (status.tipLengths || []).filter((item) => item.pipette === pipette.id);
+      const tip = tips.find((item) => String(item.uri || "").includes(`/${rack}/`)) || tips[0];
+      if (tip) calibration.tipLength[mount] = { value: tip.tipLength, at: tip.lastModified, bad: Boolean(tip.status && tip.status.markedBad), rack: String(tip.uri || "").split("/")[1] || rack };
+    }
+    this.calibration = calibration;
+    return this;
+  }
+
+  async createSession(sessionType, params = {}) {
+    const blocker = this.readiness(sessionType, params.mount);
+    if (blocker) throw new Error(blocker);
+    const data = await this.request("create", { sessionType, createParams: params });
+    return new LiveSession(this, data, params);
+  }
+
+  // Exiting first returns any tip to the rack; deleting alone would leave it on the pipette.
+  async endSession(sessionId) {
+    try {
+      await this.request("command", { sessionId, command: CAL_CMD.exit });
+    } catch (_error) {
+      await this.request("delete", { sessionId });
+    }
+  }
+}
+
+// A calibration session running on a real OT-2's robot server.
+class LiveSession {
+  constructor(robot, data, params = {}) {
+    this.robot = robot;
+    this.live = true;
+    this.id = data.id;
+    this.sessionType = data.sessionType;
+    this.hasCalibrationBlock = Boolean(params.hasCalibrationBlock);
+    this.withTipLength = false;
+    this.tipLengthSaved = false;
+    this.currentStep = null;
+    this.entry = 0;
+    this.rankIndex = 0;
+    this.ranks = null;
+    this.comparisons = null;
+    this.results = null;
+    this.tip = null;
+    this.saved = {};
+    this.apply(data.details);
+  }
+
+  apply(details) {
+    if (details.currentStep !== this.currentStep) {
+      this.entry += 1;
+      this.currentStep = details.currentStep;
+      if (this.currentStep === "tipLengthComplete") this.tipLengthSaved = true;
+    }
+    if (this.currentStep === "sessionExited") return;
+    const labware = details.labware || [];
+    if (this.sessionType === "calibrationCheck") {
+      const active = details.activePipette;
+      this.mount = String(active.mount).toLowerCase();
+      this.pipetteName = active.name;
+      this.tipRackKey = active.tipRackLoadName;
+      this.rankIndex = active.rank === "second" ? 1 : 0;
+      const ordered = [...details.instruments].sort((a, b) => (a.rank === "first" ? 0 : 1) - (b.rank === "first" ? 0 : 1));
+      this.ranks = ordered.map((pipette) => String(pipette.mount).toLowerCase());
+      this.comparisons = details.comparisonsByPipette;
+      if (this.currentStep === "resultsSummary") {
+        this.results = {
+          at: new Date().toISOString(),
+          comparisonsByPipette: this.comparisons,
+          pipettes: ordered.map((pipette) => ({ mount: String(pipette.mount).toLowerCase(), rank: pipette.rank, name: pipette.name }))
+        };
+        this.robot.calibration.health = this.results;
+      }
+    } else {
+      this.mount = String(details.instrument.mount).toLowerCase();
+      this.pipetteName = details.instrument.name;
+      const rack = labware.find((item) => item.isTiprack);
+      this.tipRackKey = rack ? rack.loadName : calPipetteInfo(this.pipetteName).tipRack;
+      // The robot clears shouldPerformTipLength partway through but keeps its state machine; so do we.
+      if (this.sessionType === "pipetteOffsetCalibration" && this.currentStep === "sessionStarted") this.withTipLength = Boolean(details.shouldPerformTipLength);
+    }
+    this.labwareOnDeck = this.currentStep !== "sessionStarted";
+    this.blockOnDeck = this.labwareOnDeck && labware.some((item) => String(item.loadName).startsWith("opentrons_calibrationblock"));
+  }
+
+  canExecute(command) { return calCanExecute(this, command); }
+  target() { return calTarget(this); }
+  referencePoint() { return calReferencePoint(this); }
+
+  // Resolves when the robot has finished the command.
+  async execute(command, data = {}) {
+    const payload = await this.robot.request("command", { sessionId: this.id, command, data });
+    this.apply(payload.details);
+    return this;
+  }
+}
+Object.defineProperties(LiveSession.prototype, CAL_SESSION_GETTERS);
+
 if (typeof module !== "undefined") {
-  module.exports = { CAL_CMD, CAL_TRANSITIONS, CAL_PIPETTES, CAL_TIPRACKS, CAL_POINTS, CAL_TOLERANCES, PracticeRobot, PracticeSession, calSurfaceAt, calTipRackA1, calBlockTarget, calNominalTipLength };
+  module.exports = { CAL_CMD, CAL_TRANSITIONS, CAL_PIPETTES, CAL_TIPRACKS, CAL_POINTS, CAL_TOLERANCES, PracticeRobot, PracticeSession, LiveRobot, LiveSession, calSurfaceAt, calTipRackA1, calBlockTarget, calNominalTipLength };
 }
