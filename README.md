@@ -2,6 +2,17 @@
 
 A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration runs the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check, on a practice robot or a real OT-2.
 
+## Mac app
+
+Download `OT-2-Manufacturing-Tools-<version>-macOS.zip` from the repository's GitHub Releases, unzip it, and double-click **OT-2 Manufacturing Tools**. It works on any Mac with macOS 11 or later, Apple silicon (including A-series MacBooks) or Intel, and needs nothing installed: the app carries its own Python, the OT-2 engine, and every dependency, and first-time setup (about 10 seconds on Apple silicon) needs no network.
+
+- **First open:** the app is not signed with an Apple Developer ID, so macOS blocks it the first time. Open **System Settings → Privacy & Security**, scroll to the message about OT-2 Manufacturing Tools, and click **Open Anyway** (once per Mac).
+- **Using it:** the tools open in your browser at `http://127.0.0.1:8766/`, reachable only from this Mac, with no password. A small window stays open while they run: **Open in browser** reopens the page, **Quit** stops the tools.
+- **Robot PIN:** on first run the app asks for an optional PIN. With one set, direct upload to an OT-2 and live calibration work from this Mac (both need the PIN when used). Change it later with **Robot PIN…**.
+- **Files:** setup unpacks into `~/Library/Application Support/OT-2 Manufacturing Tools/`, with logs in its `logs/` folder. A newer version replaces the old files on first run; the PIN setting is kept.
+
+To build a release: run `scripts/setup_simulator.sh` once, then `packaging/macos/build_release.sh <version>`; the zip lands in `dist/`. The build downloads the pinned standalone CPython for each architecture (checked against its published SHA-256) and every dependency wheel for both architectures.
+
 ## Run locally
 
 ```bash
