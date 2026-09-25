@@ -129,14 +129,14 @@ The **Labware Warehouse** screen lists each definition with its status, the dime
 
 **Every protocol build ends with a labware confirmation.** "Machine is ready" in MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP opens a checklist of every deck item (slots, definition, dimensions, what to check), the pipette and mount, and an extra check for each custom definition. Download, simulation, and robot upload appear only after every item is ticked. A placeholder, or a definition still waiting for measurements, cannot be confirmed, so the protocol cannot be generated.
 
-**The agar OmniTray definition is waiting for measurements.** Set `AGAR_PLATE_HEIGHT_MM` (filled tray, lid off) and `AGAR_SURFACE_HEIGHT_MM` (agar surface above the tray's base) in `worklists/labware.py`; until then MFG_Plating and MFG_Hybrid_Plating cannot generate protocols. The definition puts the 96 spot positions on the agar surface, so every spot is dispensed 1 mm above the agar. Pour to the measured volume: a higher surface drives tips into the agar.
+**The agar OmniTray definition** comes from a filled Nunc OmniTray measured 2026-09-25: 14.2 mm from the deck to the top of the lid (the robot runs lid off, so this slightly overstates the tray and only raises travel clearance) and the agar surface 7.7 mm above the deck. The 96 spot positions sit on the agar surface, so every spot is dispensed 1 mm above the agar; the old Corning placeholder would have put the tips about 3 mm into it. Pour to the measured volume: a higher surface drives tips into the agar. If the plates or pour change, re-measure and update `AGAR_PLATE_HEIGHT_MM` and `AGAR_SURFACE_HEIGHT_MM` in `worklists/labware.py`.
 
 WL Simulation lists the labware in every simulated protocol and opens a review when any is custom, unknown to the warehouse, or a placeholder (the Corning plate in protocols built by these tools).
 
 ## Prototype scope
 
 - MFG_Plating supports 1–144 constructs, two source plates, two tip racks, and up to six destination plates.
-- Agar plates are Nunc OmniTrays; protocols generate only after the OmniTray is measured (see Labware Warehouse).
+- Agar plates are Nunc OmniTrays with the agar surface 7.7 mm above the deck (see Labware Warehouse).
 - Constructs map column-first: A1–H1, then A2–H2. A partial final column uses all eight tips and unused channels aspirate air.
 - Starting volume is 130 µL in each occupied source well. Each source well ends at 90 µL; each destination replicate receives 10 µL.
 - Generated files can be downloaded, opened directly in WL Simulation, or uploaded to an OT-2 for analysis.

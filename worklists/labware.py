@@ -21,12 +21,14 @@ AGAR_LOAD_NAME = "built_agar_omnitray_96_spots"
 AGAR_PLACEHOLDER = "corning_96_wellplate_360ul_flat"
 ECHO_LOAD_NAME = "labcyte_echo_384pp"
 
-# Nunc OmniTray single-well agar plate, measured on a filled plate without its
-# lid (mm above the tray's base). Set both to build the agar definition; until
-# then MFG_Plating and MFG_Hybrid_Plating use a placeholder and cannot generate.
-AGAR_PLATE_HEIGHT_MM: float | None = None
-AGAR_SURFACE_HEIGHT_MM: float | None = None
-AGAR_MEASURED_ON = ""
+# Nunc OmniTray single-well agar plate, measured on a filled plate (mm above
+# the deck). The height is to the top of the lid; the robot runs lid off, so
+# this overstates the tray slightly, which only raises travel clearance. The
+# agar surface sets the dispense height. Set either to None to block the
+# plating tools until the plate is measured again.
+AGAR_PLATE_HEIGHT_MM: float | None = 14.2
+AGAR_SURFACE_HEIGHT_MM: float | None = 7.7
+AGAR_MEASURED_ON = "2026-09-25"
 
 PLATING = ["MFG_Plating", "MFG_Hybrid_Plating"]
 
