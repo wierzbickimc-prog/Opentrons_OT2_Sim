@@ -36,7 +36,7 @@ button { transition: border-color .18s ease, background .18s ease, transform .18
 .header-status { color: #d5c6d9; border-color: #563261; font-size: 9px; letter-spacing: .08em; }
 .eyebrow { color: #c790d0; letter-spacing: .15em; }
 
-.landing-screen { position: relative; padding: 11vh max(9vw,90px); overflow: hidden; background: none; }
+.landing-screen { position: relative; padding: 11vh max(9vw,90px); overflow-x: hidden; overflow-y: auto; background: none; }
 .landing-screen::after { content: ""; position: absolute; z-index: -1; width: 420px; height: 420px; right: 6vw; top: 5vh; opacity: .34; background: linear-gradient(45deg,transparent 49.5%,#5d2a68 50%,transparent 50.5%),linear-gradient(-45deg,transparent 49.5%,#5d2a68 50%,transparent 50.5%); background-size: 76px 76px; mask-image: linear-gradient(135deg,black,transparent 78%); transform: rotate(8deg); }
 .landing-copy { max-width: 740px; }
 .landing-copy h2 { margin: 8px 0 10px; font-size: clamp(38px,4.4vw,64px); }
