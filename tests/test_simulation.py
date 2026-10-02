@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from worklists import pcr_amp  # noqa: E402
+from worklists import mfg_template, pcr_amp  # noqa: E402
 from tests.test_pcr_amp import full_four_plate_sheet  # noqa: E402
 SIM_PYTHON = ROOT / ".venv-sim" / "bin" / "python"
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -105,6 +105,43 @@ class EngineSimulationTests(unittest.TestCase):
         self.assertEqual(result["safety"]["findings"], [])
         self.assertEqual(len(self.echo_dispensed(result)), 384)
         self.assertEqual(sum(1 for c in result["commands"] if c["type"] == "pickUpTip"), 48)
+
+    def test_mfg_template_spots_water_then_culture_on_the_named_plates(self):
+        csv_lines = (FIXTURES / "LAB2456_plating_template.csv").read_text().splitlines()
+        # B1 asks for conc spots 2 and 3, so column 1 gets the 3 + 7 spot in both.
+        csv_lines[2] = csv_lines[2].replace("conc,dil,dil,dil", "conc,conc,conc,dil")
+        plan = mfg_template.plan_plating("\n".join(csv_lines))
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol = Path(tmp) / "template.py"
+            protocol.write_text(plan["protocol"])
+            result = simulate(protocol)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["safety"]["status"], "pass")
+        self.assertEqual(self.codes(result, "info"), {"air-aspirate-empty-well"})
+        self.assertEqual([c["params"]["message"] for c in result["commands"] if c["type"] == "comment"], plan["notices"])
+        self.assertEqual({lw["slot"]: lw["label"] for lw in result["labware"] if lw["loadName"] == "built_agar_omnitray_96_spots"},
+                         {"1": "LAB0000_XFRMS_1 (Kanamycin)", "2": "LAB0000_XFRMS_2 (Carbenicillin)"})
+        # One water tip column for the whole run, then one per source column.
+        self.assertEqual(sum(1 for c in result["commands"] if c["type"] == "pickUpTip"), 5)
+        first_drop = next(i for i, c in enumerate(result["commands"]) if c["type"].startswith("dropTip"))
+        water, culture = {}, {}
+        slots = {lw["id"]: lw["slot"] for lw in result["labware"]}
+        for event in result["safety"]["liquid"]["events"]:
+            for change in event["wells"]:
+                if slots[change["labware"]] in ("1", "2") and change["delta"] > 0:
+                    target = water if event["command"] < first_drop else culture
+                    key = (slots[change["labware"]], change["well"])
+                    target[key] = target.get(key, 0) + change["delta"]
+        expected_culture = {}
+        for slot, column, rows, spots in (("1", 1, "ABCDEFGH", (10, 3, 3, 1)), ("1", 5, "ABCDEFGH", (10, 1, 1, 1)),
+                                          ("2", 1, "ABCDEFGH", (10, 1, 1, 1)), ("2", 5, "ABCD", (10, 1, 1, 1))):
+            for offset, volume in enumerate(spots):
+                expected_culture.update({(slot, f"{row}{column + offset}"): volume for row in rows})
+        self.assertEqual({k: round(v, 6) for k, v in culture.items()}, expected_culture)
+        # Water tops every occupied spot up to 10 uL; rows E-H of the partial column get water only.
+        for key, volume in culture.items():
+            self.assertAlmostEqual(volume + water.get(key, 0), 10, msg=str(key))
+        self.assertEqual({key for key in water if key not in culture}, {("2", f"{row}{c}") for row in "EFGH" for c in (6, 7, 8)})
 
     def test_fixtures_report_expected_findings(self):
         expected = {

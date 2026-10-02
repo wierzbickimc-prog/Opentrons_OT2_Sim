@@ -560,6 +560,8 @@ def describe_labware(view: Any, item: Any, definition: Any, origin: Any) -> Dict
         "namespace": definition.namespace,
         "version": definition.version,
         "displayName": definition.metadata.displayName,
+        # The protocol's load_labware label, when it gives one (e.g. an agar plate's name and antibiotic).
+        "label": getattr(item, "displayName", None),
         "category": str(definition.metadata.displayCategory),
         "isTiprack": is_tiprack,
         "slot": view.geometry.get_ancestor_slot_name(item.id).id if hasattr(view.geometry.get_ancestor_slot_name(item.id), "id") else str(view.geometry.get_ancestor_slot_name(item.id)),

@@ -86,7 +86,8 @@ function labwareDimensions(entry) {
 
 // Every deck item, pipette, and custom definition the protocol relies on, as one checklist.
 // Resolves true once every item is ticked; placeholders and missing definitions cannot be confirmed.
-async function confirmLabware({ title, items, pipettes = [] }) {
+// `notices` are run-specific points the operator must acknowledge, one checklist item each.
+async function confirmLabware({ title, items, pipettes = [], notices = [] }) {
   try {
     await loadWarehouse();
   } catch (error) {
@@ -113,6 +114,9 @@ async function confirmLabware({ title, items, pipettes = [] }) {
   }
   for (const pipette of pipettes) {
     checklist.push({ label: `${pipette.mount === "left" ? "Left" : "Right"} mount: ${pipette.label}`, detail: `${pipette.name} · attached and shown in the OT-2 App` });
+  }
+  for (const notice of notices) {
+    checklist.push({ label: notice.label, detail: notice.detail, tone: "custom" });
   }
   const body = blocked.length
     ? `<p class="prompt-warning">This protocol cannot be generated: ${blocked.map((entry) => `${escapeHtml(entry.displayName || entry.loadName)} is a ${entry.status === "pending" ? "definition still waiting for measurements" : "placeholder"}`).join("; ")}. See the Labware Warehouse.</p>`
@@ -145,7 +149,7 @@ function reviewSimulatedLabware(model, metadata) {
   });
   $("#sim-labware").innerHTML = rows.map(({ lw, status }) => {
     const info = LABWARE_STATUS[status] || LABWARE_STATUS.unknown;
-    return `<li class="labware-row ${info.tone}"><span>${escapeHtml(lw.slot ? `Slot ${lw.slot}` : "")}</span><strong>${escapeHtml(lw.displayName)}</strong><small>${escapeHtml(info.label)}</small></li>`;
+    return `<li class="labware-row ${info.tone}"><span>${escapeHtml(lw.slot ? `Slot ${lw.slot}` : "")}</span><strong>${escapeHtml(lw.label ? `${lw.label}: ${lw.displayName}` : lw.displayName)}</strong><small>${escapeHtml(info.label)}</small></li>`;
   }).join("") || `<li class="labware-row"><small>No labware loaded.</small></li>`;
   const flagged = rows.filter(({ status }) => status !== "standard");
   $("#sim-labware-card").dataset.status = flagged.some(({ status }) => LABWARE_STATUS[status].tone === "blocked") ? "fail" : flagged.length ? "warn" : "pass";
@@ -154,7 +158,7 @@ function reviewSimulatedLabware(model, metadata) {
     const info = LABWARE_STATUS[status] || LABWARE_STATUS.unknown;
     const dims = `${lw.dimensions.z} mm tall${Object.values(lw.wells)[0] ? `, first well bottom ${(Object.values(lw.wells)[0].z - lw.origin.z).toFixed(2)} mm above the base` : ""}`;
     const why = status === "placeholder" ? (entry && entry.source) || "" : entry && entry.verify ? entry.verify : "Not an Opentrons definition: the simulation trusts it exactly, so check it against the physical item.";
-    return { label: `Slot ${lw.slot} · ${lw.displayName} (${info.label})`, detail: `${lw.loadName} · ${lw.namespace || "?"} · ${dims}. ${why}`, tone: info.tone, blocked: info.tone === "blocked" };
+    return { label: `Slot ${lw.slot} · ${lw.label ? `${lw.label}: ` : ""}${lw.displayName} (${info.label})`, detail: `${lw.loadName} · ${lw.namespace || "?"} · ${dims}. ${why}`, tone: info.tone, blocked: info.tone === "blocked" };
   });
   showPrompt({
     eyebrow: "Labware review",

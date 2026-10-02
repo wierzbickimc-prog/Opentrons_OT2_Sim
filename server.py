@@ -26,7 +26,7 @@ from pathlib import Path
 from http.cookies import SimpleCookie
 from urllib.parse import unquote, urlparse
 
-from worklists import labware, pcr_amp
+from worklists import labware, mfg_template, pcr_amp
 
 
 ROOT = Path(__file__).resolve().parent
@@ -145,6 +145,9 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             return
         if path.endswith("/api/pcr-amp/plan"):
             self.handle_pcr_amp_plan()
+            return
+        if path.endswith("/api/mfg-template/plan"):
+            self.handle_mfg_template_plan()
             return
         if path.endswith("/api/ot2/calibration"):
             self.handle_calibration()
@@ -283,6 +286,20 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
             self.send_json(200, plan)
         except pcr_amp.PlanError as exc:
             self.send_json(422, {"error": "The PCR plan cannot be transferred.", "errors": exc.errors})
+        except RequestError as exc:
+            self.send_json(exc.status, {"error": exc.message})
+
+    def handle_mfg_template_plan(self) -> None:
+        try:
+            request = self.read_json_request()
+            csv_text = request.get("csv", "")
+            if not isinstance(csv_text, str) or not csv_text.strip():
+                raise RequestError(400, "Upload a plating template CSV.")
+            identifier = request.get("identifier", "")
+            plan = mfg_template.plan_plating(csv_text, identifier=identifier if isinstance(identifier, str) else "")
+            self.send_json(200, plan)
+        except mfg_template.PlanError as exc:
+            self.send_json(422, {"error": "The plating template cannot be plated.", "errors": exc.errors})
         except RequestError as exc:
             self.send_json(exc.status, {"error": exc.message})
 

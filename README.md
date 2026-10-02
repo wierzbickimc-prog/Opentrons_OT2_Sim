@@ -1,6 +1,6 @@
 # OT-2 Protocol Visualizer
 
-A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration runs the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check, on a practice robot or a real OT-2.
+A browser-based manufacturing tool for creating 1–144 construct plating work lists (straight or diluted with water), PCR->AMP plate transfers, and testing OT-2 protocols before they reach a robot. MFG_Plating, MFG_Hybrid_Plating, MFG_plating_template, and PCR->AMP plate transfer generate downloadable Python protocols. WL Simulation runs any OT-2 Python protocol on Opentrons' own OT-2 engine against an emulated motor controller, then animates the recorded motion, scrolls the G-code the robot would send, and runs safety checks. Equipment calibration runs the OT-2 App's deck, tip length, and pipette offset calibrations and the Calibration Health Check, on a practice robot or a real OT-2.
 
 ## Mac app
 
@@ -22,7 +22,7 @@ OT2_SITE_PASSWORD='your-password' python3 server.py
 
 `OT2_SITE_PASSWORD` gates the whole app: every page, asset, and API redirects to a sign-in page until the password is entered. Sessions last 12 hours, are signed with a per-process secret (restarting the server signs everyone out), and five wrong attempts from one address lock sign-in for five minutes. Leave the variable unset to disable the gate. Keep the password out of the repository: set it in the environment or in `~/.config/ot2-visualizer.env` on the host.
 
-Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, or **PCR->AMP plate transfer** to create a work list, **WL Simulation** to review a protocol, **Equipment calibration** to calibrate a robot or practice doing so, or **Labware Warehouse** to see every labware definition the tools use.
+Open <http://localhost:8766>. Choose **MFG_Plating**, **MFG_Hybrid_Plating**, **MFG_plating_template**, or **PCR->AMP plate transfer** to create a work list, **WL Simulation** to review a protocol, **Equipment calibration** to calibrate a robot or practice doing so, or **Labware Warehouse** to see every labware definition the tools use.
 
 After updating files while the server is already running, reload the page with the browser's cache bypass shortcut (`Cmd+Shift+R` on macOS or `Ctrl+Shift+R` on Linux/Windows).
 
@@ -48,6 +48,24 @@ Same inputs, mapping, and deck as MFG_Plating, but the four spots per construct 
 - **Water:** NEST 1-Well Reservoir 195 mL in slot 9, filled to the line. The protocol models 100 mL for liquid tracking; a full run uses 2.3 mL.
 
 On the engine, 144 constructs take about 10 minutes (MFG_Plating: about 8), and water drops wait 3.4–6.8 minutes for their culture.
+
+## MFG_plating_template
+
+Upload a plating template CSV to spot each construct four times onto the agar plate it names. The planner (`worklists/mfg_template.py`, served at `POST /api/mfg-template/plan`) reads these columns by header name; the others are ignored:
+
+| Header | Use |
+| --- | --- |
+| `r_id` | Construct number suffix; `_97` and up are on source plate 2 (slot 8) |
+| `r_well` | Source well |
+| `r_abx` | Antibiotic of the agar plate; one per plate |
+| `r_agar` | Agar plate; the `_n` suffix is the plate number. One experiment prefix per sheet |
+| `Spot_1`–`Spot_4` | `conc` (10 µL culture) or `dil` (9 µL water, then 1 µL culture) |
+
+- **Deck:** agar plates in slots 1–6 in plate-number order, source plates 7–8, water reservoir 9, 20 µL tips 10–11. The deck setup, bill of materials, labware confirmation, and the protocol's labware labels (shown in the OT-2 App and on WL Simulation's top-down deck) name each agar plate with its antibiotic.
+- **Placement:** each source column takes the next third of its agar plate (left, middle, right; agar columns 1–4, 5–8, 9–12). A plate that gets fewer than three columns keeps the rest empty, so an early `_2` starts at the left of the next plate.
+- **Spot rules:** Spot_1 is conc, Spot_4 is dil, and Spot_3 is dil whenever Spot_2 is. The eight-channel spots a whole column the same way, so when the constructs in a column ask for different Spot_2 or Spot_3 types, the whole column gets 3 µL culture + 7 µL water (30%). The planner lists each such spot, the labware confirmation makes the operator tick it, and the protocol logs it as a comment.
+- **Rejected sheets:** a column with constructs for two agar plates (a plate change must start a new column), a plate with two antibiotics, more than three columns on one plate, more than six agar plates, agar plates out of source order, or a row that breaks the spot rules.
+- **Run:** water first with one tip column (9 or 7 µL per spot, drawn in groups of at most 18 µL plus 2 µL blown back), then culture with a fresh tip per source column, grouped into draws of at most 20 µL. Spots are dispensed 1 mm above the agar. Rows of a partial column with no construct get only water.
 
 ## PCR->AMP plate transfer
 
@@ -138,7 +156,7 @@ The robot moves by labware definitions, and the simulator trusts them exactly, s
 
 The **Labware Warehouse** screen lists each definition with its status, the dimensions the robot relies on, what to check on the physical item, which tools use it, a JSON download, and a blueprint drawing (top view, front elevation, title block) drawn from the definition.
 
-**Every protocol build ends with a labware confirmation.** "Machine is ready" in MFG_Plating, MFG_Hybrid_Plating, and PCR->AMP opens a checklist of every deck item (slots, definition, dimensions, what to check), the pipette and mount, and an extra check for each custom definition. Download, simulation, and robot upload appear only after every item is ticked. A placeholder, or a definition still waiting for measurements, cannot be confirmed, so the protocol cannot be generated.
+**Every protocol build ends with a labware confirmation.** "Machine is ready" in MFG_Plating, MFG_Hybrid_Plating, MFG_plating_template, and PCR->AMP opens a checklist of every deck item (slots, definition, dimensions, what to check), the pipette and mount, and an extra check for each custom definition. Download, simulation, and robot upload appear only after every item is ticked. A placeholder, or a definition still waiting for measurements, cannot be confirmed, so the protocol cannot be generated.
 
 **The agar OmniTray definition** comes from a filled Nunc OmniTray measured 2026-09-25: 14.2 mm from the deck to the top of the lid (the robot runs lid off, so this slightly overstates the tray and only raises travel clearance) and the agar surface 7.7 mm above the deck. The 96 spot positions sit on the agar surface, so every spot is dispensed 1 mm above the agar; the old Corning placeholder would have put the tips about 3 mm into it. Pour to the measured volume: a higher surface drives tips into the agar. If the plates or pour change, re-measure and update `AGAR_PLATE_HEIGHT_MM` and `AGAR_SURFACE_HEIGHT_MM` in `worklists/labware.py`.
 

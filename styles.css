@@ -403,3 +403,16 @@ canvas { display: block; width: 100%; height: 100%; }
 .labware-row small { color: #a992af; }
 #sim-labware-card[data-status="warn"] { border-color: #8a6a2d; }
 #sim-labware-card[data-status="fail"] { border-color: #a0404f; }
+
+/* MFG_plating_template: the antibiotic on each agar plate */
+.deck-slot.abx-slot { border-left: 5px solid var(--abx); }
+.deck-slot .abx-tag { display: inline-block; margin: 2px 0 1px; padding: 1px 6px; border-radius: 3px; color: #120d14; background: var(--abx); font-style: normal; font-weight: 800; font-size: 9px; letter-spacing: .02em; }
+.deck-slot.abx-slot span { overflow-wrap: anywhere; }
+.abx-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 9px; font-weight: 700; color: #d8cbdc; }
+.abx-legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 5px; border-radius: 2px; vertical-align: -1px; background: var(--abx); }
+.abx-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 2px; background: var(--abx); }
+.spot-cell { white-space: nowrap; }
+.spot-chip { display: inline-block; min-width: 30px; margin-right: 3px; padding: 1px 4px; border: 1px solid #4a3f4f; border-radius: 3px; text-align: center; font-size: 9px; }
+.spot-chip.conc { border-color: #8a3c80; }
+.spot-chip.dil { border-color: #2f6f80; }
+.spot-chip.mixed { color: #2b1d02; border-color: #ffc247; background: #ffc247; font-weight: 800; }

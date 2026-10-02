@@ -30,7 +30,7 @@ AGAR_PLATE_HEIGHT_MM: float | None = 14.2
 AGAR_SURFACE_HEIGHT_MM: float | None = 7.7
 AGAR_MEASURED_ON = "2026-09-25"
 
-PLATING = ["MFG_Plating", "MFG_Hybrid_Plating"]
+PLATING = ["MFG_Plating", "MFG_Hybrid_Plating", "MFG_plating_template"]
 
 CATALOG: dict[str, dict] = {
     "opentrons_96_tiprack_20ul": {
@@ -54,7 +54,7 @@ CATALOG: dict[str, dict] = {
         "checks": ["Full-skirted PCR plate, not semi-skirted or unskirted", "Seated flat, seal removed"],
     },
     "nest_1_reservoir_195ml": {
-        "status": "standard", "kind": "Reservoir", "usedBy": ["MFG_Hybrid_Plating"],
+        "status": "standard", "kind": "Reservoir", "usedBy": ["MFG_Hybrid_Plating", "MFG_plating_template"],
         "checks": ["NEST 1-well 195 mL reservoir", "Water filled to the line"],
     },
     ECHO_LOAD_NAME: {
@@ -141,6 +141,39 @@ def agar_definition(plate_height: float | None = None, agar_surface: float | Non
         "wells": wells,
         "groups": [{"wells": list(wells), "metadata": {"wellBottomShape": "flat"}}],
     }
+
+
+def agar_definition_python(plate_height: float, agar_surface: float) -> str:
+    """The agar_definition() protocols embed; the same text as agarDefinitionPython in labware.js."""
+    return f'''# Nunc OmniTray agar plate, measured on a filled plate (mm above the tray's base).
+AGAR_PLATE_HEIGHT_MM = {plate_height}
+AGAR_SURFACE_HEIGHT_MM = {agar_surface}
+
+
+def agar_definition():
+    """Nunc OmniTray agar with 96 spot positions on the agar surface."""
+    rows, columns = "ABCDEFGH", range(1, 13)
+    wells = {{
+        f"{{row}}{{column}}": {{
+            "shape": "rectangular", "xDimension": 8.0, "yDimension": 8.0,
+            "depth": round(AGAR_PLATE_HEIGHT_MM - AGAR_SURFACE_HEIGHT_MM, 2), "totalLiquidVolume": 50,
+            "x": round(14.38 + 9 * (column - 1), 2), "y": round(74.24 - 9 * index, 2), "z": AGAR_SURFACE_HEIGHT_MM,
+        }}
+        for index, row in enumerate(rows)
+        for column in columns
+    }}
+    return {{
+        "schemaVersion": 2, "version": 1, "namespace": "custom_beta",
+        "metadata": {{"displayName": "Nunc OmniTray agar, 96 spots", "displayCategory": "wellPlate", "displayVolumeUnits": "µL", "tags": []}},
+        "brand": {{"brand": "Thermo Scientific Nunc", "brandId": ["OmniTray"]}},
+        "parameters": {{"format": "96Standard", "isTiprack": False, "isMagneticModuleCompatible": False, "loadName": "{AGAR_LOAD_NAME}"}},
+        "dimensions": {{"xDimension": 127.76, "yDimension": 85.48, "zDimension": AGAR_PLATE_HEIGHT_MM}},
+        "cornerOffsetFromSlot": {{"x": 0, "y": 0, "z": 0}},
+        "ordering": [[f"{{row}}{{column}}" for row in rows] for column in columns],
+        "wells": wells,
+        "groups": [{{"wells": list(wells), "metadata": {{"wellBottomShape": "flat"}}}}],
+    }}
+'''
 
 
 @lru_cache(maxsize=None)

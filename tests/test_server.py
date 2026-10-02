@@ -137,6 +137,21 @@ class SiteLoginTests(unittest.TestCase):
         self.assertEqual(len(json.loads(body)["errors"]), 2)
         self.assertEqual(self.request("/api/pcr-amp/plan", {"csv": ""}, cookie=cookie)[0], 400)
 
+    def test_mfg_template_plan_returns_protocol_or_every_sheet_error(self):
+        cookie = self.sign_in()
+        self.assertEqual(self.request("/api/mfg-template/plan", {"csv": "x"})[0], 401)
+        csv_text = (Path(__file__).parent / "fixtures" / "LAB2456_plating_template.csv").read_text()
+        status, _, body = self.request("/api/mfg-template/plan", {"csv": csv_text}, cookie=cookie)
+        self.assertEqual(status, 200)
+        plan = json.loads(body)
+        self.assertEqual((plan["identifier"], plan["filename"], len(plan["agarPlates"])), ("LAB0000_XFRMS", "LAB0000_XFRMS.py", 2))
+        self.assertTrue(plan["protocol"].startswith("from opentrons import protocol_api"))
+        bad = csv_text.replace("C4,Carbenicillin", "I4,Carbenicillin").replace("D4,Carbenicillin,NEB Stable,LAB0000_XFRMS_2,1,conc", "D4,Carbenicillin,NEB Stable,LAB0000_XFRMS_2,1,dil")
+        status, _, body = self.request("/api/mfg-template/plan", {"csv": bad}, cookie=cookie)
+        self.assertEqual(status, 422)
+        self.assertEqual(len(json.loads(body)["errors"]), 2)
+        self.assertEqual(self.request("/api/mfg-template/plan", {"csv": ""}, cookie=cookie)[0], 400)
+
     def test_repeated_failures_are_rate_limited(self):
         for _ in range(server.LOGIN_MAX_FAILURES):
             self.assertEqual(self.request("/api/login", {"password": "9999"})[0], 401)

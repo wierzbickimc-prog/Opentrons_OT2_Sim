@@ -457,6 +457,7 @@ function routeTo(route) {
   $("#landing-screen").hidden = route !== "landing";
   $("#mfg-screen").hidden = route !== "mfg" && route !== "hybrid";
   $("#amp-screen").hidden = route !== "amp";
+  $("#tpl-screen").hidden = route !== "template";
   $("#simulator-screen").hidden = route !== "simulator";
   $("#cal-screen").hidden = route !== "calibration";
   $("#warehouse-screen").hidden = route !== "warehouse";
@@ -464,6 +465,7 @@ function routeTo(route) {
     landing: ["OT-2 Manufacturing Tools", "Protocol planning, generation, and simulation"],
     mfg: ["MFG_Plating", "Work-list creation and protocol delivery"],
     hybrid: ["MFG_Hybrid_Plating", "Diluted spots with water added first"],
+    template: ["MFG_plating_template", "Plating from a template CSV, by agar plate and antibiotic"],
     amp: ["PCR->AMP plate transfer", "96-well PCR plates into a 384-well Echo plate"],
     simulator: ["WL Simulation", "OT-2 engine simulation, G-code, and safety checks"],
     calibration: ["Equipment calibration", "OT-2 deck, tip length, and pipette offset calibration"],
@@ -1113,6 +1115,181 @@ $("#amp-robot-upload-form").addEventListener("submit", (event) => {
   uploadToRobot({
     button: $("#amp-upload-to-robot"), address: $("#amp-robot-address"), pin: $("#amp-upload-pin"),
     filename: ampPlan.filename, protocol: ampPlan.protocol, worklistId: ampPlan.identifier, report: showAmpStatus
+  });
+});
+
+
+// ------------------------------------------------------- MFG_plating_template
+
+let tplCsv = "";
+let tplPlan = null;
+let tplConfirmed = false;
+
+// Distinct colours so neighbouring plates with different antibiotics are easy to tell apart.
+const ABX_COLORS = { kanamycin: "#ff9f1c", carbenicillin: "#2ec4b6", ampicillin: "#4d96ff", chloramphenicol: "#c77dff", spectinomycin: "#ffd166", tetracycline: "#ef476f", gentamicin: "#06d6a0" };
+const ABX_FALLBACK = ["#f4a261", "#90be6d", "#f72585", "#4cc9f0", "#b5838d"];
+function abxColor(plan, antibiotic) {
+  const known = ABX_COLORS[antibiotic.trim().toLowerCase()];
+  if (known) return known;
+  const unknown = [...new Set(plan.agarPlates.map((plate) => plate.antibiotic))].filter((name) => !ABX_COLORS[name.trim().toLowerCase()]);
+  return ABX_FALLBACK[unknown.indexOf(antibiotic) % ABX_FALLBACK.length];
+}
+
+const SPOT_TEXT = { conc: "10", dil: "1+9", mixed: "3+7" };
+const POSITION_NAMES = ["left", "middle", "right"];
+
+function showTplStatus(message, isError, details = []) {
+  const status = $("#tpl-status");
+  status.hidden = false;
+  status.classList.toggle("error", Boolean(isError));
+  status.innerHTML = escapeHtml(message) + (details.length ? `<ul>${details.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "");
+}
+
+function resetTplPlan() {
+  tplPlan = null;
+  tplConfirmed = false;
+  $("#tpl-machine-ready").disabled = true;
+  $("#tpl-delivery-panel").hidden = true;
+  $("#tpl-state").textContent = "Draft";
+  $("#tpl-state").classList.remove("ready");
+}
+
+function tplDeckSlot(plan, slot) {
+  const agar = plan.agarPlates.find((plate) => plate.slot === slot);
+  const source = plan.sourcePlates.find((plate) => plate.slot === slot);
+  const tips = plan.tipSlots.indexOf(slot);
+  let item = { type: "empty", label: "Empty", detail: "" };
+  if (agar) {
+    return `<div class="deck-slot destination abx-slot" style="--abx:${abxColor(plan, agar.antibiotic)}"><b>${slot}</b><div><span>${escapeHtml(agar.name)}</span><em class="abx-tag">${escapeHtml(agar.antibiotic)}</em><small>${agar.constructs} constructs</small></div></div>`;
+  }
+  if (source) item = { type: "source", label: `Source plate ${source.number}`, detail: `PCR plate · ${source.constructs} constructs` };
+  else if (tips >= 0) item = { type: "tips", label: `Tip rack ${tips + 1}`, detail: "20 µL tips" };
+  else if (slot === plan.reservoirSlot) item = { type: "reservoir", label: "Water reservoir", detail: "NEST 195 mL · fill to line" };
+  else if (slot === 12) item = { type: "trash", label: "Fixed trash", detail: "Built in" };
+  return `<div class="deck-slot ${item.type}"><b>${slot}</b><div><span>${escapeHtml(item.label)}</span><small>${escapeHtml(item.detail)}</small></div></div>`;
+}
+
+function tplBillOfMaterials(plan) {
+  const items = [
+    ["P20 8-Channel GEN2 pipette", 1, "Left mount", ""],
+    ["Opentrons 96 Tip Rack 20 µL", plan.tipSlots.length, slotList(plan.tipSlots), `${plan.tipColumns} tip columns: 1 for all water, ${plan.columns.length} for culture`],
+    ["Opentrons 96-well PCR plate, 200 µL full skirt", plan.sourcePlates.length, slotList(plan.sourcePlates.map((plate) => plate.slot)), "Culture, 130 µL per occupied well"],
+    ...plan.agarPlates.map((plate) => [`${agarPlateName()}: ${plate.name}`, 1, `Slot ${plate.slot}`, `${plate.antibiotic} agar · ${plate.constructs} constructs`]),
+    ["NEST 1-Well Reservoir 195 mL", 1, `Slot ${plan.reservoirSlot}`, `Water, filled to the line (run uses ${plan.waterMl} mL)`]
+  ];
+  return items.map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtml(String(cell))}</td>`).join("")}</tr>`).join("");
+}
+
+function renderTplPlan(plan) {
+  $("#tpl-output-title").textContent = plan.identifier;
+  $("#tpl-required-constructs").textContent = plan.constructCount;
+  $("#tpl-required-sources").textContent = plan.sourcePlates.length;
+  $("#tpl-required-destinations").textContent = plan.agarPlates.length;
+  $("#tpl-required-tips").textContent = plan.tipSlots.length;
+  $("#tpl-mapping-summary").textContent = `${plan.constructCount} constructs · ${plan.columns.length} source columns`;
+  const deckOrder = [10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3];
+  $("#tpl-deck").innerHTML = deckOrder.map((slot) => tplDeckSlot(plan, slot)).join("");
+  const antibiotics = [...new Set(plan.agarPlates.map((plate) => plate.antibiotic))];
+  $("#tpl-abx-legend").innerHTML = antibiotics.map((abx) => `<span style="--abx:${abxColor(plan, abx)}">${escapeHtml(abx)}: ${plan.agarPlates.filter((plate) => plate.antibiotic === abx).map((plate) => `slot ${plate.slot}`).join(", ")}</span>`).join("");
+  const plates = Object.fromEntries(plan.agarPlates.map((plate) => [plate.number, plate]));
+  const twoSources = plan.sourcePlates.length > 1;
+  $("#tpl-mapping-body").innerHTML = plan.columns.map((column) => {
+    const count = column.wells.length;
+    const wells = `${column.wells[0]}–${column.wells[count - 1]}${count < 8 ? ` (${count} of 8)` : ""}`;
+    const plate = plates[column.agar];
+    const spots = column.spots.map((kind) => `<span class="spot-chip ${kind}">${SPOT_TEXT[kind]}${kind === "mixed" ? " ⚠" : ""}</span>`).join("");
+    return `<tr><td>${twoSources ? `Plate ${column.source} · ` : ""}Column ${column.column} · ${escapeHtml(count > 1 ? wells : column.wells[0])}</td>`
+      + `<td><i class="abx-dot" style="--abx:${abxColor(plan, plate.antibiotic)}"></i>${escapeHtml(plate.name)} · ${POSITION_NAMES[column.position]}, columns ${column.agarColumns[0]}–${column.agarColumns[3]}</td>`
+      + `<td class="spot-cell">${spots}</td></tr>`;
+  }).join("");
+  $("#tpl-bom-body").innerHTML = tplBillOfMaterials(plan);
+}
+
+async function calculateTplPlan({ fillIdentifier = false } = {}) {
+  if (!tplCsv) { showTplStatus("Choose a plating template CSV.", true); return; }
+  resetTplPlan();
+  showTplStatus("Checking the plating template…", false);
+  try {
+    const response = await apiFetch("./api/mfg-template/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv: tplCsv, identifier: fillIdentifier ? "" : $("#tpl-id").value.trim() })
+    });
+    const result = await response.json();
+    if (!response.ok) { showTplStatus(result.error || `Planning failed (${response.status})`, true, result.errors || []); return; }
+    tplPlan = result;
+    if (fillIdentifier || !$("#tpl-id").value.trim()) $("#tpl-id").value = result.identifier;
+    renderTplPlan(result);
+    $("#tpl-machine-ready").disabled = false;
+    $("#tpl-state").textContent = "Setup calculated";
+    const plates = result.agarPlates.length;
+    const mixed = result.notices.length
+      ? [`${result.notices.length} spot${result.notices.length === 1 ? "" : "s"} mix conc and dil within a column and will be 3 µL culture + 7 µL water (30%):`, ...result.notices]
+      : [];
+    showTplStatus(`Mapped ${result.constructCount} constructs onto ${plates} agar plate${plates === 1 ? "" : "s"}. Verify the deck before continuing.`, false, [...mixed, ...result.warnings]);
+  } catch (error) {
+    showTplStatus(error.message, true);
+  }
+}
+
+$("#open-template").addEventListener("click", () => routeTo("template"));
+
+$("#tpl-csv").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    tplCsv = await readLocalFile(file);
+    $("#tpl-csv-name").textContent = file.name;
+    await calculateTplPlan({ fillIdentifier: true });
+  } catch (error) {
+    showTplStatus(error.message, true);
+  }
+});
+
+$("#tpl-id").addEventListener("input", () => {
+  if (!tplPlan) return;
+  resetTplPlan();
+  showTplStatus("Work-list details changed. Calculate the deck setup again before confirming the deck.", false);
+});
+
+$("#tpl-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!$("#tpl-id").value.trim() && tplCsv) { showTplStatus("Enter a unique identifier.", true); return; }
+  calculateTplPlan();
+});
+
+$("#tpl-machine-ready").addEventListener("click", async () => {
+  if (!tplPlan) return;
+  const plan = tplPlan;
+  const notices = plan.notices.map((notice) => ({ label: `Mixed spot: ${notice.split(":")[0]} will be 3 µL culture + 7 µL water`, detail: notice }));
+  const confirmed = await confirmLabware({ title: `Confirm labware for ${plan.identifier}`, items: plan.labware, pipettes: plan.pipettes, notices });
+  if (!confirmed || tplPlan !== plan) return;
+  tplConfirmed = true;
+  $("#tpl-delivery-panel").hidden = false;
+  $("#tpl-state").textContent = "Machine ready";
+  $("#tpl-state").classList.add("ready");
+  $("#tpl-machine-ready").disabled = true;
+  showTplStatus("Labware confirmed. The protocol is ready to download, simulate, or upload for OT-2 analysis.", false);
+});
+
+$("#tpl-download").addEventListener("click", () => {
+  if (!tplPlan || !tplConfirmed) return;
+  downloadProtocol(tplPlan.filename, tplPlan.protocol);
+  showTplStatus(`Downloaded ${tplPlan.filename}. Import it into the Opentrons OT-2 App for analysis and setup.`, false);
+});
+
+$("#tpl-simulate").addEventListener("click", () => {
+  if (!tplPlan || !tplConfirmed) return;
+  openInSimulation(tplPlan.filename, tplPlan.protocol, $("#tpl-upload-pin"));
+});
+
+$("#tpl-robot-upload-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!tplPlan || !tplConfirmed) return;
+  uploadToRobot({
+    button: $("#tpl-upload-to-robot"), address: $("#tpl-robot-address"), pin: $("#tpl-upload-pin"),
+    filename: tplPlan.filename, protocol: tplPlan.protocol, worklistId: tplPlan.identifier, report: showTplStatus
   });
 });
 

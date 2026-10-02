@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#1a0b20">
   <title>OT-2 Manufacturing Tools</title>
   <script>if (!/\/$|\.html$/.test(location.pathname)) location.replace(location.pathname + "/" + location.search);</script>
-  <link rel="stylesheet" href="styles.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=13">
   <link rel="stylesheet" href="brand.css?v=4">
 </head>
 <body>
@@ -25,6 +25,7 @@
     <section class="landing-options">
       <button id="open-mfg" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Plating</strong><small>Create a mapped work list and robot-ready protocol.</small></span><b>→</b></button>
       <button id="open-hybrid" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_Hybrid_Plating</strong><small>Spot 10, 10, 3 and 1 µL of each construct, with water topping the last two up to 10 µL.</small></span><b>→</b></button>
+      <button id="open-template" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>MFG_plating_template</strong><small>Plate constructs from a plating template CSV: agar plate, antibiotic, and conc or dil spots per construct.</small></span><b>→</b></button>
       <button id="open-amp" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>PCR-&gt;AMP plate transfer</strong><small>Rearray 96-well PCR plates into a 384-well Echo plate from a PCR plan CSV.</small></span><b>→</b></button>
       <button id="open-simulator" class="landing-card"><span class="card-icon file-play-icon" aria-hidden="true">▷</span><span><strong>WL Simulation</strong><small>Run a protocol on the OT-2 engine: motion, G-code, and safety checks.</small></span><b>→</b></button>
       <button id="open-warehouse" class="landing-card"><span class="card-icon plate-icon" aria-hidden="true"><i></i></span><span><strong>Labware Warehouse</strong><small>Every labware definition the tools use, with blueprints, dimensions, and what to check.</small></span><b>→</b></button>
@@ -113,6 +114,47 @@
           <label>Robot address<input id="amp-robot-address" class="text-field" type="text" required placeholder="192.168.1.42"></label>
           <label>Upload PIN<input id="amp-upload-pin" class="text-field" type="password" required autocomplete="off"></label>
           <button id="amp-upload-to-robot" type="submit" class="secondary-button">Upload to OT-2</button>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <main id="tpl-screen" class="mfg-screen view-screen" hidden>
+    <section class="mfg-form-panel">
+      <button class="back-button" data-route="landing">← All tools</button>
+      <p class="eyebrow">New work list</p><h2>MFG_plating_template</h2>
+      <div class="stepper" aria-label="Work-list steps"><span class="active"><b>1</b> Plating template</span><i></i><span><b>2</b> Deck setup</span><i></i><span><b>3</b> Generate</span></div>
+      <p class="form-intro">Spot each construct four times onto the agar plate named in the template using a P20 eight-channel GEN2. Every spot ends at 10 µL: conc is 10 µL culture; dil is 9 µL water laid down first, then 1 µL culture.</p>
+      <form id="tpl-form">
+        <label class="field-label" for="tpl-csv">Plating template CSV</label>
+        <label class="upload-button" for="tpl-csv"><span aria-hidden="true">⇧</span> <span id="tpl-csv-name">Choose CSV</span></label><input id="tpl-csv" class="file-input" type="file" accept=".csv,text/csv">
+        <small class="field-help">Uses r_id (constructs _97 and up are on source plate 2), r_well, r_abx, r_agar (the _n suffix is the agar plate), and Spot_1–Spot_4 (conc or dil).</small>
+        <label class="field-label" for="tpl-id">Unique identifier</label>
+        <input id="tpl-id" class="text-field" type="text" maxlength="80" required placeholder="Filled from r_agar">
+        <small class="field-help">Included in protocol metadata and the downloaded filename.</small>
+        <button type="submit" class="primary-button">Calculate deck setup</button>
+      </form>
+      <div id="tpl-status" class="notice" hidden></div>
+    </section>
+
+    <section class="worklist-output">
+      <div class="output-heading"><div><p class="eyebrow">Calculated setup</p><h2 id="tpl-output-title">Upload a plating template</h2></div><span id="tpl-state" class="state-chip">Draft</span></div>
+      <div class="requirement-cards">
+        <div><strong id="tpl-required-constructs">—</strong><span>constructs</span></div><div><strong id="tpl-required-sources">—</strong><span>source plates</span></div><div><strong id="tpl-required-destinations">—</strong><span>agar plates</span></div><div><strong id="tpl-required-tips">—</strong><span>tip racks</span></div>
+      </div>
+      <div class="setup-grid">
+        <article class="setup-card"><div class="setup-title"><h3>OT-2 deck layout</h3><span>Top-down · front ↓</span></div><div id="tpl-deck" class="work-deck" aria-label="Calculated OT-2 deck setup"></div><div class="deck-legend"><span class="destination-key">Agar plate</span><span class="source-key">Source</span><span class="tip-key">Tip rack</span><span class="reservoir-key">Reservoir</span><span class="empty-key">Empty</span></div><div id="tpl-abx-legend" class="abx-legend"></div></article>
+        <article class="setup-card mapping-card"><div class="setup-title"><h3>Source mapping</h3><span id="tpl-mapping-summary">One row per eight-channel column</span></div><div class="mapping-scroll"><table><thead><tr><th>Source</th><th>Agar plate</th><th>Spots 1–4</th></tr></thead><tbody id="tpl-mapping-body"></tbody></table></div></article>
+      </div>
+      <article class="setup-card bom-card"><div class="setup-title"><h3>Bill of materials</h3><span>Load before confirming</span></div><table><thead><tr><th>Item</th><th>Qty</th><th>Location</th><th>Notes</th></tr></thead><tbody id="tpl-bom-body"></tbody></table></article>
+      <div class="ready-panel"><div><strong>Verify every required item is in the indicated slot.</strong><small>Protocol generation is enabled only after operator confirmation.</small></div><button id="tpl-machine-ready" class="ready-button" disabled><span>▷</span> Machine is ready</button></div>
+      <section id="tpl-delivery-panel" class="delivery-panel" hidden>
+        <div class="delivery-actions"><button id="tpl-download" class="primary-button">Download Python protocol</button><button id="tpl-simulate" class="secondary-button">Open in WL Simulation</button></div>
+        <form id="tpl-robot-upload-form" class="robot-upload-form">
+          <div><p class="eyebrow">Direct OT-2 submission</p><strong>Uploads for analysis—does not start a run</strong></div>
+          <label>Robot address<input id="tpl-robot-address" class="text-field" type="text" required placeholder="192.168.1.42"></label>
+          <label>Upload PIN<input id="tpl-upload-pin" class="text-field" type="password" required autocomplete="off"></label>
+          <button id="tpl-upload-to-robot" type="submit" class="secondary-button">Upload to OT-2</button>
         </form>
       </section>
     </section>
@@ -224,9 +266,9 @@
   </dialog>
   <div id="global-error" class="global-error" hidden></div>
   <script>window.addEventListener("error",function(e){var n=document.getElementById("global-error");n.hidden=false;n.textContent="Application error: "+(e.message||"unknown error");});</script>
-  <script src="simulator.js?v=4"></script>
-  <script src="app.js?v=15"></script>
-  <script src="labware.js?v=1"></script>
+  <script src="simulator.js?v=7"></script>
+  <script src="app.js?v=16"></script>
+  <script src="labware.js?v=3"></script>
   <script src="calibration_flows.js?v=2"></script>
   <script src="calibration.js?v=3"></script>
 </body>

@@ -320,6 +320,35 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha.toFixed(3)})`;
 }
 
+// A protocol's labware label as a tag straddling the back edge of the plate.
+// A label too wide for the plate breaks before its "(…)" part, e.g. the antibiotic.
+function drawLabwareLabel(ctx, text, centerX, topY, maxWidth) {
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  const fits = (lines) => lines.every((line) => ctx.measureText(line).width <= maxWidth - 8);
+  let lines = [text];
+  for (const candidate of [[text], text.split(/ (?=\()/)]) {
+    for (const size of [9, 8, 7]) {
+      ctx.font = `700 ${size}px system-ui`;
+      if (fits(candidate)) { lines = candidate; break; }
+    }
+    if (fits(candidate)) { lines = candidate; break; }
+    lines = candidate;
+  }
+  lines = lines.map((line) => {
+    let cut = line;
+    while (cut.length > 4 && ctx.measureText(cut).width > maxWidth - 8) cut = cut.slice(0, -2);
+    return cut === line ? line : `${cut.trimEnd()}…`;
+  });
+  const lineHeight = 11;
+  const width = Math.min(maxWidth, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 10);
+  simRoundedRect(ctx, centerX - width / 2, topY - 7, width, lines.length * lineHeight + 3, 3);
+  ctx.fillStyle = "rgba(12,8,14,.82)"; ctx.fill();
+  ctx.fillStyle = "#ffe7a8";
+  lines.forEach((line, i) => ctx.fillText(line, centerX, topY - 7 + (i + 1) * lineHeight));
+  ctx.restore();
+}
+
 function drawTopView(canvas, ctx, model, t) {
   const size = fitCanvas(canvas, ctx);
   ctx.clearRect(0, 0, size.width, size.height);
@@ -380,6 +409,7 @@ function drawTopView(canvas, ctx, model, t) {
         ctx.stroke();
       }
     }
+    if (lw.label) drawLabwareLabel(ctx, lw.label, X(o.x + d.x / 2), Y(o.y + d.y), d.x * s - 8);
   }
 
   // Current command path (starting nozzle), then the pipette channels.

@@ -10,11 +10,12 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from worklists import labware, pcr_amp  # noqa: E402
+from worklists import labware, mfg_template, pcr_amp  # noqa: E402
 
 SIM_PYTHON = ROOT / ".venv-sim" / "bin" / "python"
 NODE = shutil.which("node")
 SAMPLE_CSV = (ROOT / "tests" / "fixtures" / "LAB2446_pcr_plan.csv").read_text()
+TEMPLATE_CSV = (ROOT / "tests" / "fixtures" / "LAB2456_plating_template.csv").read_text()
 
 
 def run_protocol_function(protocol: str, name: str):
@@ -29,9 +30,10 @@ def run_protocol_function(protocol: str, name: str):
 
 class WarehouseCatalogTests(unittest.TestCase):
     def test_every_labware_the_builders_load_is_in_the_warehouse(self):
-        sources = (ROOT / "app.js").read_text() + (ROOT / "worklists" / "pcr_amp.py").read_text()
+        sources = (ROOT / "app.js").read_text() + (ROOT / "worklists" / "pcr_amp.py").read_text() + (ROOT / "worklists" / "mfg_template.py").read_text()
         loaded = set(re.findall(r'load_labware\("([a-z0-9_]+)"', sources))
         loaded |= {item["loadName"] for item in pcr_amp.plan_transfer(SAMPLE_CSV)["labware"]}
+        loaded |= {item["loadName"] for item in mfg_template.plan_plating(TEMPLATE_CSV)["labware"]}
         self.assertTrue(loaded)
         self.assertEqual(loaded - set(labware.CATALOG), set())
 
@@ -65,6 +67,8 @@ class WarehouseCatalogTests(unittest.TestCase):
         script = "const { agarDefinitionPython } = require(process.argv[1]); process.stdout.write(agarDefinitionPython(15.2, 9.1));"
         snippet = subprocess.run([NODE, "-e", script, str(ROOT / "labware.js")], capture_output=True, text=True, check=True).stdout
         self.assertEqual(run_protocol_function(snippet, "agar_definition"), labware.agar_definition(15.2, 9.1))
+        # The template planner builds protocols in Python; its copy must be the same text.
+        self.assertEqual(snippet, labware.agar_definition_python(15.2, 9.1))
 
 
 @unittest.skipUnless(SIM_PYTHON.exists(), "OT-2 simulator is not installed; run scripts/setup_simulator.sh")
