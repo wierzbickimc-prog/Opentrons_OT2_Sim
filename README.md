@@ -173,7 +173,7 @@ WL Simulation lists the labware in every simulated protocol and opens a review w
 
 ## Direct OT-2 upload
 
-Set `OT2_UPLOAD_PIN` in the server environment to enable the PIN-protected upload proxy. The proxy accepts only private LAN or Tailscale robot addresses and always uses the OT-2 HTTP API on port 31950. It uploads the generated protocol for analysis but does not create or start a run.
+Set `OT2_UPLOAD_PIN` in the server environment to enable the PIN-protected upload proxy. The proxy accepts only private LAN, Tailscale, or direct-cable (IPv4 link-local, 169.254.x.x, as with a USB-to-Ethernet adapter) robot addresses and always uses the OT-2 HTTP API on port 31950. It uploads the generated protocol for analysis but does not create or start a run.
 
 ```bash
 OT2_UPLOAD_PIN='replace-with-a-long-random-value' python3 server.py

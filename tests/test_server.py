@@ -19,7 +19,12 @@ class ServerSecurityTests(unittest.TestCase):
     def test_public_and_special_addresses_are_rejected(self):
         self.assertFalse(server.is_allowed_robot_ip("8.8.8.8"))
         self.assertFalse(server.is_allowed_robot_ip("127.0.0.1"))
-        self.assertFalse(server.is_allowed_robot_ip("169.254.1.2"))
+        self.assertFalse(server.is_allowed_robot_ip("169.254.169.254"))
+        self.assertFalse(server.is_allowed_robot_ip("fe80::1"))
+
+    def test_a_robot_cabled_to_this_computer_is_allowed(self):
+        # USB-to-Ethernet gives the OT-2 an IPv4 link-local address.
+        self.assertTrue(server.is_allowed_robot_ip("169.254.43.120"))
 
     def test_current_and_legacy_multipart_field_names(self):
         for field_name in ("files", "protocolFile"):

@@ -347,7 +347,7 @@ class ApplicationHandler(SimpleHTTPRequestHandler):
         except socket.gaierror as exc:
             raise RequestError(400, "The robot address could not be resolved from the server.") from exc
         if not addresses or not all(is_allowed_robot_ip(address) for address in addresses):
-            raise RequestError(400, "The robot must resolve to a private LAN or Tailscale address.")
+            raise RequestError(400, "The robot must resolve to a private LAN, Tailscale, or direct-cable (169.254.x.x) address.")
         ipv4_addresses = sorted(address for address in addresses if ipaddress.ip_address(address).version == 4)
         if not ipv4_addresses:
             raise RequestError(400, "The robot address must resolve to an IPv4 address.")
@@ -379,11 +379,17 @@ class RequestError(Exception):
         self.message = message
 
 
+# A robot cabled straight to this computer (USB-to-Ethernet) gets an IPv4
+# link-local address; 169.254.169.254 is the cloud metadata service, never a robot.
+LINK_LOCAL_DENY = {ipaddress.ip_address("169.254.169.254")}
+
+
 def is_allowed_robot_ip(raw_address: str) -> bool:
     address = ipaddress.ip_address(raw_address.split("%", 1)[0])
     tailscale = address.version == 4 and address in ipaddress.ip_network("100.64.0.0/10")
-    return (address.is_private or tailscale) and not (
-        address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified
+    direct = address.version == 4 and address.is_link_local and address not in LINK_LOCAL_DENY
+    return (address.is_private or tailscale or direct) and not (
+        address.is_loopback or (address.is_link_local and not direct) or address.is_multicast or address.is_unspecified
     )
 
 
